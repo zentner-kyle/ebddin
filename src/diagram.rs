@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use std::sync::Arc;
 use std::usize;
 
 const INVALID_VARIABLE: usize = usize::MAX;
@@ -36,7 +37,7 @@ impl NodeInner {
     }
 }
 
-pub enum NodeX {
+pub enum Node {
     Leaf { value: bool },
     Branch {
         variable: usize,
@@ -45,14 +46,14 @@ pub enum NodeX {
     },
 }
 
-pub struct Diagram {
+pub struct Graph {
     nodes: Vec<NodeInner>,
     variable_count: usize,
 }
 
-impl Diagram {
+impl Graph {
     pub fn new() -> Self {
-        Diagram {
+        Graph {
             nodes: vec![NodeInner::zero(), NodeInner::one()],
             variable_count: 0,
         }
@@ -62,7 +63,7 @@ impl Diagram {
         let mut nodes = Vec::with_capacity(capacity);
         nodes.push(NodeInner::zero());
         nodes.push(NodeInner::one());
-        Diagram {
+        Graph {
             nodes: nodes,
             variable_count: 0,
         }
@@ -94,12 +95,12 @@ impl Diagram {
         return index as usize;
     }
 
-    pub fn expand(&self, index: usize) -> NodeX {
+    pub fn expand(&self, index: usize) -> Node {
         let node = self.nodes[index];
         match node.as_literal() {
-            Some(value) => NodeX::Leaf { value },
+            Some(value) => Node::Leaf { value },
             None => {
-                NodeX::Branch {
+                Node::Branch {
                     variable: node.variable,
                     low: (index as isize + node.low) as usize,
                     high: (index as isize + node.high) as usize,
@@ -109,27 +110,33 @@ impl Diagram {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct OrderedDiagram {
+    pub root: usize,
+    pub order: Arc<Vec<usize>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn construct_zero() {
-        let mut d = Diagram::new();
-        let _zero = d.zero();
+        let mut g = Graph::new();
+        let _zero = g.zero();
     }
 
     #[test]
     fn construct_one() {
-        let mut d = Diagram::new();
-        let _one = d.one();
+        let mut g = Graph::new();
+        let _one = g.one();
     }
 
     #[test]
     fn construct_identity() {
-        let mut d = Diagram::new();
-        let zero = d.zero();
-        let one = d.one();
-        let _branch = d.branch(0, zero, one);
+        let mut g = Graph::new();
+        let zero = g.zero();
+        let one = g.one();
+        let _branch = g.branch(0, zero, one);
     }
 }

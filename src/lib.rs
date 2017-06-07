@@ -9,16 +9,16 @@ use bit_vec::BitVec;
 mod diagram;
 mod evolve;
 
-use diagram::{Diagram, NodeX};
+use diagram::{Graph, Node};
 
-fn evaluate_diagram(diagram: &Diagram, root: usize, input: &BitVec) -> bool {
+fn evaluate_diagram(graph: &Graph, root: usize, input: &BitVec) -> bool {
     let mut node = root;
     loop {
-        match diagram.expand(node) {
-            NodeX::Leaf { value } => {
+        match graph.expand(node) {
+            Node::Leaf { value } => {
                 return value;
             }
-            NodeX::Branch {
+            Node::Branch {
                 variable,
                 low,
                 high,
@@ -39,29 +39,29 @@ mod tests {
 
     #[test]
     fn evaluate_zero() {
-        let mut d = Diagram::new();
-        let zero = d.zero();
-        assert_eq!(evaluate_diagram(&d, zero, &BitVec::from_elem(0, false)),
+        let mut g = Graph::new();
+        let zero = g.zero();
+        assert_eq!(evaluate_diagram(&g, zero, &BitVec::from_elem(0, false)),
                    false);
     }
 
     #[test]
     fn evaluate_one() {
-        let mut d = Diagram::new();
-        let one = d.one();
-        assert_eq!(evaluate_diagram(&d, one, &BitVec::from_elem(0, false)),
+        let mut g = Graph::new();
+        let one = g.one();
+        assert_eq!(evaluate_diagram(&g, one, &BitVec::from_elem(0, false)),
                    true);
     }
 
     #[test]
     fn evaluate_identity() {
-        let mut d = Diagram::new();
-        let zero = d.zero();
-        let one = d.one();
-        let branch = d.branch(0, zero, one);
-        assert_eq!(evaluate_diagram(&d, branch, &BitVec::from_elem(1, false)),
+        let mut g = Graph::new();
+        let zero = g.zero();
+        let one = g.one();
+        let branch = g.branch(0, zero, one);
+        assert_eq!(evaluate_diagram(&g, branch, &BitVec::from_elem(1, false)),
                    false);
-        assert_eq!(evaluate_diagram(&d, branch, &BitVec::from_elem(1, true)),
+        assert_eq!(evaluate_diagram(&g, branch, &BitVec::from_elem(1, true)),
                    true);
     }
 }
