@@ -60,8 +60,8 @@ impl Diagram {
 
     pub fn with_capacity(capacity: usize) -> Self {
         let mut nodes = Vec::with_capacity(capacity);
-        nodes[0] = NodeInner::zero();
-        nodes[1] = NodeInner::one();
+        nodes.push(NodeInner::zero());
+        nodes.push(NodeInner::one());
         Diagram {
             nodes: nodes,
             variable_count: 0,

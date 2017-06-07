@@ -7,3 +7,4 @@ authors = ["Kyle Zentner <zentner.kyle@gmail.com>"]
 bit-vec = "0.4.4"
 smallvec = "0.4.0"
 vec_map = "0.8.0"
+rand = "0.3"

@@ -2,10 +2,12 @@
 extern crate bit_vec;
 extern crate smallvec;
 extern crate vec_map;
+extern crate rand;
 
 use bit_vec::BitVec;
 
 mod diagram;
+mod evolve;
 
 use diagram::{Diagram, NodeX};
 
