@@ -1,13 +1,17 @@
 #![allow(dead_code)]
+#[macro_use]
+extern crate log;
 extern crate bit_vec;
 extern crate smallvec;
 extern crate vec_map;
 extern crate rand;
+extern crate env_logger;
 
 use bit_vec::BitVec;
 
 mod diagram;
 mod evolve;
+mod walk;
 
 use diagram::{Graph, Node};
 

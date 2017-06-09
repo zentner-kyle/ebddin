@@ -142,9 +142,9 @@ pub struct DiagramPopulation {
 pub fn evolve_diagrams<'a, F, R>(rng: &'a mut R,
                                  es: EvolutionStrategy,
                                  params: RDDParams,
-                                 fitness: F)
+                                 mut fitness: F)
                                  -> DiagramPopulation
-    where F: Fn(&Graph, &OrderedDiagram) -> f64,
+    where F: FnMut(&Graph, &OrderedDiagram) -> f64,
           R: Rng
 {
     let pop = population(es);
@@ -309,28 +309,28 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
 fn mutate_n2<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
-    // Remove a random redundant test.
+    // Remove a redundant non-terminal.
     return false;
 }
 
 fn mutate_n2_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
-    // Remove a random redundant test.
+    // Insert a redundant non-terminal.
     return false;
 }
 
 fn mutate_n3<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
-    // Remove a random redundant test.
+    // Swap adjacent variables in order.
     return false;
 }
 
 fn mutate_a1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
-    // Remove a random redundant test.
+    // Change a random non-terminal to point to a new vertex.
     return false;
 }
 

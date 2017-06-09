@@ -116,6 +116,15 @@ pub struct OrderedDiagram {
     pub order: Arc<Vec<usize>>,
 }
 
+impl OrderedDiagram {
+    pub fn from_root(root: usize, variable_count: usize) -> Self {
+        OrderedDiagram {
+            root,
+            order: Arc::new((0..variable_count).collect()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
