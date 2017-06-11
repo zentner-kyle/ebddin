@@ -283,68 +283,14 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
     where R: Rng
 {
     // Insert a random redundant test.
-    let mut path = Vec::with_capacity(diagram.order.len());
-    let mut node = diagram.root;
-    loop {
-        path.push(node);
-        match graph.expand(node) {
-            Node::Leaf { value: _ } => {
-                break;
-            }
-            Node::Branch {
-                variable,
-                low,
-                high,
-            } => {
-                let direction = rng.gen();
-                if direction {
-                    node = high;
-                } else {
-                    node = low;
-                }
-            }
-        }
-    }
-    let step_to_mutate = rng.gen_range(0, path.len());
-    // Insert a redundant check *before* step_to_mutate.
-    let original = path[step_to_mutate];
-    // Figure out what variable to use for the redundant test.
-    let variable = if step_to_mutate == 0 {
-        // We chose to insert before the first step, so we can use the first variable.
-        diagram.order[0]
-    } else {
-        // Go back one step and get the variable.
-        let previous_step = path[step_to_mutate - 1];
-        if let Node::Branch {
-                   variable: v,
-                   low: _,
-                   high: _,
-               } = graph.expand(previous_step) {
-            v
-        } else {
-            // Wasn't the last step, so it must be a branch.
-            unreachable!();
-        }
+    let to_fix =
+        choose_from_iter(rng, PathIter::new(diagram, graph)).expect("diagram should not be empty");
+    let variable = match graph.expand(to_fix.node) {
+        Node::Branch { variable, .. } => variable,
+        Node::Leaf { .. } => diagram.order[0],
     };
-    // Insert the redundant test.
-    let mut replacement = graph.branch(variable, original, original);
-    for i in (0..step_to_mutate).rev() {
-        let original = path[i + 1];
-        if let Node::Branch {
-                   variable,
-                   low,
-                   high,
-               } = graph.expand(path[i]) {
-            if low == original {
-                replacement = graph.branch(variable, replacement, high);
-            } else {
-                replacement = graph.branch(variable, low, replacement);
-            }
-        } else {
-            unreachable!();
-        }
-    }
-    diagram.root = replacement;
+    let replacement = graph.branch(variable, to_fix.node, to_fix.node);
+    diagram.root = rebuild_diagram(graph, &to_fix.path, &to_fix.variables, replacement);
     return true;
 }
 
