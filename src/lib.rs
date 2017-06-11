@@ -6,6 +6,7 @@ extern crate smallvec;
 extern crate vec_map;
 extern crate rand;
 extern crate env_logger;
+extern crate dot;
 
 use bit_vec::BitVec;
 
@@ -13,6 +14,7 @@ mod diagram;
 mod evolve;
 mod walk;
 mod random;
+mod render;
 
 use diagram::{Graph, Node};
 

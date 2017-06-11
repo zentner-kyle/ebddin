@@ -383,6 +383,8 @@ mod tests {
     use evaluate_diagram;
     use rand::SeedableRng;
     use rand::XorShiftRng;
+    use render::{render_diagram, render_whole_graph};
+    use std::fs::File;
 
     #[test]
     fn evolve_can_evaluate_1() {
@@ -405,7 +407,14 @@ mod tests {
             return 0.0f64;
         };
         let evolved_population = evolve_diagrams(&mut rng, strategy, params, fitness);
-        for diagram in &evolved_population.diagrams {
+        {
+            let mut f = File::create("test_output/evolve_can_evaluate_1_graph.dot").unwrap();
+            render_whole_graph(&mut f, &evolved_population.graph).unwrap();
+        }
+        for (idx, diagram) in evolved_population.diagrams.iter().enumerate() {
+            let mut f = File::create(format!("test_output/diagram_to_compute_1_number{}.dot", idx))
+                .unwrap();
+            render_diagram(&mut f, diagram.clone(), &evolved_population.graph).unwrap();
             assert!(evaluate_diagram(&evolved_population.graph, diagram.root, &zero_bitvec));
         }
     }
