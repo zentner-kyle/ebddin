@@ -12,6 +12,7 @@ use bit_vec::BitVec;
 mod diagram;
 mod evolve;
 mod walk;
+mod random;
 
 use diagram::{Graph, Node};
 
