@@ -4,7 +4,7 @@ use std::usize;
 
 const INVALID_VARIABLE: usize = usize::MAX;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NodeInner {
     variable: usize,
     low: isize,
@@ -37,6 +37,7 @@ impl NodeInner {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Node {
     Leaf { value: bool },
     Branch {
@@ -46,6 +47,7 @@ pub enum Node {
     },
 }
 
+#[derive(Debug, Clone)]
 pub struct Graph {
     nodes: Vec<NodeInner>,
     variable_count: usize,
