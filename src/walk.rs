@@ -30,10 +30,10 @@ impl<'a> PathIter<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Path {
-    path: Rc<Vec<usize>>,
-    variables: Rc<Vec<Option<bool>>>,
-    node: usize,
-    value: Option<bool>,
+    pub path: Rc<Vec<usize>>,
+    pub variables: Rc<Vec<Option<bool>>>,
+    pub node: usize,
+    pub value: Option<bool>,
 }
 
 impl Path {

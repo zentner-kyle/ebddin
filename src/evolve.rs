@@ -2,7 +2,9 @@
 use bit_vec::BitVec;
 use diagram::{Graph, Node, OrderedDiagram};
 use rand::Rng;
+use random::choose_from_iter;
 use std::sync::Arc;
+use walk::PathIter;
 
 #[derive(Clone, Copy, Debug)]
 pub enum EvolutionStrategy {
@@ -230,11 +232,51 @@ fn random_bitvec<R>(rng: &mut R, size: usize) -> BitVec
     result
 }
 
+fn rebuild_diagram(graph: &mut Graph,
+                   path: &[usize],
+                   variables: &[Option<bool>],
+                   replacement: usize)
+                   -> usize {
+    let mut node = replacement;
+    for p in path {
+        if let Node::Branch {
+                   variable,
+                   low,
+                   high,
+               } = graph.expand(*p) {
+            if variables[variable].expect("All variables on path should be set") {
+                node = graph.branch(variable, low, node);
+            } else {
+                node = graph.branch(variable, node, high);
+            }
+        } else {
+            panic!("All nodes in a path must be branches");
+        }
+    }
+    return node;
+}
+
 fn mutate_n1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
     // Remove a random redundant test.
-    return false;
+    if let Some((to_fix, replacement)) =
+        choose_from_iter(rng,
+                         PathIter::new(diagram, graph).filter_map(|path| {
+            match graph.expand(path.node) {
+                Node::Branch {
+                    variable: _,
+                    low,
+                    high,
+                } if low == high => Some((path, low)),
+                _ => None,
+            }
+        })) {
+        diagram.root = rebuild_diagram(graph, &to_fix.path, &to_fix.variables, replacement);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
@@ -345,10 +387,10 @@ mod tests {
     #[test]
     fn evolve_can_evaluate_1() {
         let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
-        let pop = 10;
+        let pop = 2;
         let strategy = EvolutionStrategy::Pairwise {
             population: pop,
-            generations: 100 * pop,
+            generations: 10 * pop,
         };
         let params = RDDParams {
             variable_count: 10,
