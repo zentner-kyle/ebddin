@@ -298,14 +298,70 @@ fn mutate_n2<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
     where R: Rng
 {
     // Remove a redundant non-terminal.
-    return false;
+    if let Some((to_fix, variable, child)) =
+        choose_from_iter(rng,
+                         PathIter::new(diagram, graph).filter_map(|path| {
+            if let Node::Branch {
+                       variable,
+                       low,
+                       high,
+                   } = graph.expand(path.node) {
+                if let (Node::Branch {
+                            low: low_low,
+                            high: low_high,
+                            ..
+                        },
+                        Node::Branch {
+                            low: high_low,
+                            high: high_high,
+                            ..
+                        }) = (graph.expand(low), graph.expand(low)) {
+                    if low_low == high_low && low_high == high_high {
+                        return Some((path, variable, low));
+                    }
+                }
+            }
+            return None;
+        })) {
+        let replacement = graph.branch(variable, child, child);
+        diagram.root = rebuild_diagram(graph, &to_fix.path, &to_fix.variables, replacement);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 fn mutate_n2_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
     // Insert a redundant non-terminal.
-    return false;
+    if let Some((to_fix, variable, (child, child_variable, low, high))) =
+        choose_from_iter(rng,
+                         PathIter::new(diagram, graph).filter_map(|path| {
+            if let Node::Branch {
+                       low,
+                       high,
+                       variable,
+                   } = graph.expand(path.node) {
+                if low == high {
+                    if let Node::Branch {
+                               variable: child_variable,
+                               low: child_low,
+                               high: child_high,
+                           } = graph.expand(low) {
+                        return Some((path, variable, (low, child_variable, child_low, child_high)));
+                    }
+                }
+            }
+            return None;
+        })) {
+        let child_dup = graph.branch(child_variable, low, high);
+        let replacement = graph.branch(variable, child, child_dup);
+        diagram.root = rebuild_diagram(graph, &to_fix.path, &to_fix.variables, replacement);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 fn mutate_n3<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
