@@ -3,6 +3,7 @@ use bit_vec::BitVec;
 use diagram::{Graph, Node, OrderedDiagram};
 use rand::Rng;
 use random::choose_from_iter;
+use std::collections::HashSet;
 use std::sync::Arc;
 use walk::PathIter;
 
@@ -374,8 +375,46 @@ fn mutate_n3<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
 fn mutate_a1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
-    // Change a random non-terminal to point to a new vertex.
-    return false;
+    // Change a random non-terminal to point to a new vertex that is not its own ancestor.
+    let mut allowed_nodes = HashSet::new();
+    if let Some((to_fix, variable, mut low, mut high)) =
+        choose_from_iter(rng,
+                         PathIter::new(diagram, graph).filter_map(|path| {
+            allowed_nodes.insert(path.node);
+            if let Node::Branch {
+                       low,
+                       high,
+                       variable,
+                   } = graph.expand(path.node) {
+                return Some((path, variable, low, high));
+            }
+            return None;
+        })) {
+        for visit in PathIter::new(diagram, graph) {
+            if visit.node == to_fix.node {
+                for node in visit.path.as_slice() {
+                    allowed_nodes.remove(node);
+                }
+            }
+        }
+        let allowed_nodes: Vec<usize> = allowed_nodes.into_iter().collect();
+        if rng.gen() {
+            // Change low.
+            low = rng.choose(&allowed_nodes)
+                .cloned()
+                .expect("branches must have some non-ancestor nodes in their diagram");
+        } else {
+            // Change high.
+            high = rng.choose(&allowed_nodes)
+                .cloned()
+                .expect("branches must have some non-ancestor nodes in their diagram");
+        }
+        let replacement = graph.branch(variable, low, high);
+        diagram.root = rebuild_diagram(graph, &to_fix.path, &to_fix.variables, replacement);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 
