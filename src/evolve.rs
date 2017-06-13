@@ -1,6 +1,6 @@
 #![allow(unused_variables)]
 use bit_vec::BitVec;
-use diagram::{Graph, Node, OrderedDiagram};
+use diagram::{Branch, Graph, Node, OrderedDiagram};
 use rand::Rng;
 use random::choose_from_iter;
 use std::collections::HashSet;
@@ -271,34 +271,28 @@ fn rebuild_diagram(graph: &mut Graph,
     let mut ready = Vec::new();
     ready.push(original);
     while let Some(node) = ready.pop() {
-        if let Node::Branch {
-                   variable,
-                   low,
-                   high,
-               } = graph.expand(node) {
-            let low_replacement = replacements.get(&low).cloned().unwrap_or(low);
-            let high_replacement = replacements.get(&high).cloned().unwrap_or(high);
-            let replacement = graph.branch(variable, low_replacement, high_replacement);
-            replacements.insert(node, replacement);
-            for &parent in parent_graph
-                    .get(&node)
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[]) {
-                if let Node::Branch {
-                           variable,
-                           low,
-                           high,
-                       } = graph.expand(parent) {
-                    if (!ancestor_set.contains(&low) || replacements.contains_key(&low)) &&
-                       (!ancestor_set.contains(&high) || replacements.contains_key(&high)) {
-                        ready.push(parent);
-                    }
-                } else {
-                    unreachable!();
-                }
+        let Branch {
+            variable,
+            low,
+            high,
+        } = graph.expand_branch(node);
+        let low_replacement = replacements.get(&low).cloned().unwrap_or(low);
+        let high_replacement = replacements.get(&high).cloned().unwrap_or(high);
+        let replacement = graph.branch(variable, low_replacement, high_replacement);
+        replacements.insert(node, replacement);
+        for &parent in parent_graph
+                .get(&node)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]) {
+            let Branch {
+                variable,
+                low,
+                high,
+            } = graph.expand_branch(parent);
+            if (!ancestor_set.contains(&low) || replacements.contains_key(&low)) &&
+               (!ancestor_set.contains(&high) || replacements.contains_key(&high)) {
+                ready.push(parent);
             }
-        } else {
-            panic!("Can only replace branch nodes");
         }
     }
     return *replacements
@@ -351,17 +345,14 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
             let mut max_prev_variable_idx = -1;
             if let Some(parents) = parent_graph.get(&visit.node) {
                 for &parent in parents {
-                    if let Node::Branch { variable, .. } = graph.expand(parent) {
-                        let variable_index = diagram
-                            .order
-                            .iter()
-                            .position(|&v| v == variable)
-                            .expect("All variables should be in the order");
-                        if variable_index as isize > max_prev_variable_idx {
-                            max_prev_variable_idx = variable_index as isize;
-                        }
-                    } else {
-                        unreachable!();
+                    let variable = graph.expand_branch(parent).variable;
+                    let variable_index = diagram
+                        .order
+                        .iter()
+                        .position(|&v| v == variable)
+                        .expect("All variables should be in the order");
+                    if variable_index as isize > max_prev_variable_idx {
+                        max_prev_variable_idx = variable_index as isize;
                     }
                 }
             }
@@ -375,21 +366,18 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
         let fixed = graph.branch(diagram.order[variable_index], to_fix.node, to_fix.node);
         // If we didn't replace the root.
         if let Some(&parent) = to_fix.path.last() {
-            if let Node::Branch {
-                       variable,
-                       low,
-                       high,
-                   } = graph.expand(parent) {
-                let replacement;
-                if to_fix.node == low {
-                    replacement = graph.branch(variable, fixed, high);
-                } else {
-                    replacement = graph.branch(variable, low, fixed);
-                }
-                diagram.root = rebuild_diagram(graph, diagram, parent, replacement);
+            let Branch {
+                variable,
+                low,
+                high,
+            } = graph.expand_branch(parent);
+            let replacement;
+            if to_fix.node == low {
+                replacement = graph.branch(variable, fixed, high);
             } else {
-                unreachable!();
+                replacement = graph.branch(variable, low, fixed);
             }
+            diagram.root = rebuild_diagram(graph, diagram, parent, replacement);
         } else {
             diagram.root = fixed;
         }

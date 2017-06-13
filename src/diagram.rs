@@ -47,6 +47,13 @@ pub enum Node {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Branch {
+    pub variable: usize,
+    pub low: usize,
+    pub high: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct Graph {
     nodes: Vec<NodeInner>,
@@ -108,6 +115,22 @@ impl Graph {
                     high: (index as isize + node.high) as usize,
                 }
             }
+        }
+    }
+
+    pub fn expand_branch(&self, index: usize) -> Branch {
+        if let Node::Branch {
+                   variable,
+                   low,
+                   high,
+               } = self.expand(index) {
+            Branch {
+                variable,
+                low,
+                high,
+            }
+        } else {
+            panic!("expand_branch called on leaf");
         }
     }
 }
