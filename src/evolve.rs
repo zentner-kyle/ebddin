@@ -155,7 +155,7 @@ pub fn evolve_diagrams<'a, F, R>(rng: &'a mut R,
     let mut graph = Graph::with_capacity(pop);
     let mut diagrams: Vec<_> = (0..pop)
         .map(|_| {
-            let mut order: Vec<_> = (0..pop).collect();
+            let mut order: Vec<_> = (0..params.variable_count).collect();
             rng.shuffle(&mut order);
             let root = generate_branch(rng, params, &mut graph);
             OrderedDiagram {
@@ -478,6 +478,8 @@ fn mutate_a1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
 {
     // Change a random non-terminal to point to a new vertex that is not its own ancestor.
     let mut allowed_nodes = HashSet::new();
+    allowed_nodes.insert(0);
+    allowed_nodes.insert(1);
     if let Some((to_fix, variable, mut low, mut high)) =
         choose_from_iter(rng,
                          PathIter::new(diagram, graph).filter_map(|path| {
@@ -529,7 +531,7 @@ mod tests {
     use std::fs::File;
 
     #[test]
-    fn evolve_can_evaluate_1() {
+    fn evolve_can_evolve_1() {
         let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let pop = 2;
         let strategy = EvolutionStrategy::Pairwise {
@@ -550,7 +552,7 @@ mod tests {
         };
         let evolved_population = evolve_diagrams(&mut rng, strategy, params, fitness);
         {
-            let mut f = File::create("test_output/evolve_can_evaluate_1_graph.dot").unwrap();
+            let mut f = File::create("test_output/evolve_can_evolve_1_graph.dot").unwrap();
             render_whole_graph(&mut f, &evolved_population.graph).unwrap();
         }
         for (idx, diagram) in evolved_population.diagrams.iter().enumerate() {
@@ -558,6 +560,49 @@ mod tests {
                 .unwrap();
             render_diagram(&mut f, diagram.clone(), &evolved_population.graph).unwrap();
             assert!(evaluate_diagram(&evolved_population.graph, diagram.root, &zero_bitvec));
+        }
+    }
+
+    #[test]
+    fn evolve_can_evolve_identity() {
+        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let pop = 5;
+        let strategy = EvolutionStrategy::Pairwise {
+            population: pop,
+            generations: 2 * pop,
+        };
+        let params = RDDParams {
+            variable_count: 1,
+            mutation_count: 10,
+        };
+        let zero_bitvec = BitVec::from_elem(params.variable_count, false);
+        let one_bitvec = BitVec::from_elem(params.variable_count, true);
+        let fitness = |graph: &_, diagram: &OrderedDiagram| {
+            let mut f = 0.0;
+            if evaluate_diagram(graph, diagram.root, &zero_bitvec) == false {
+                f += 1.0;
+            }
+            if evaluate_diagram(graph, diagram.root, &one_bitvec) == true {
+                f += 1.0;
+            }
+            return f;
+        };
+        let evolved_population = evolve_diagrams(&mut rng, strategy, params, fitness);
+        {
+            let mut f = File::create("test_output/evolve_can_evolve_identity_graph.dot").unwrap();
+            render_whole_graph(&mut f, &evolved_population.graph).unwrap();
+        }
+        for (idx, diagram) in evolved_population.diagrams.iter().enumerate() {
+            let mut f = File::create(format!("test_output/diagram_to_compute_identity_number{}.dot",
+                                             idx))
+                    .unwrap();
+            render_diagram(&mut f, diagram.clone(), &evolved_population.graph).unwrap();
+            assert_eq!(Branch {
+                           variable: 0,
+                           low: 0,
+                           high: 1,
+                       },
+                       evolved_population.graph.expand_branch(diagram.root));
         }
     }
 }
