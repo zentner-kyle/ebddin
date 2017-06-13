@@ -247,10 +247,13 @@ fn make_parent_graph(graph: &Graph, diagram: &OrderedDiagram) -> HashMap<usize, 
     return parent_graph;
 }
 
-fn make_ancestor_set(graph: &Graph, diagram: &OrderedDiagram, node: usize) -> HashSet<usize> {
+fn make_ancestor_set<I>(graph: &Graph, diagram: &OrderedDiagram, nodes: I) -> HashSet<usize>
+    where I: Iterator<Item = usize>
+{
+    let roots: HashSet<usize> = nodes.collect();
     let mut ancestors = HashSet::new();
     for visit in PathIter::new(diagram, graph) {
-        if visit.node == node {
+        if roots.contains(&visit.node) {
             for node in visit.path.as_slice() {
                 ancestors.insert(*node);
             }
@@ -264,12 +267,18 @@ fn rebuild_diagram(graph: &mut Graph,
                    original: usize,
                    replacement: usize)
                    -> usize {
-    let ancestor_set = make_ancestor_set(graph, diagram, original);
-    let parent_graph = make_parent_graph(graph, diagram);
     let mut replacements: HashMap<usize, usize> = HashMap::new();
     replacements.insert(original, replacement);
-    let mut ready = Vec::new();
-    ready.push(original);
+    rebuild_diagram_from_replacements(graph, diagram, replacements)
+}
+
+fn rebuild_diagram_from_replacements(graph: &mut Graph,
+                                     diagram: &OrderedDiagram,
+                                     mut replacements: HashMap<usize, usize>)
+                                     -> usize {
+    let parent_graph = make_parent_graph(graph, diagram);
+    let ancestor_set = make_ancestor_set(graph, diagram, replacements.keys().cloned());
+    let mut ready: Vec<usize> = replacements.keys().cloned().collect();
     while let Some(node) = ready.pop() {
         let Branch {
             variable,
