@@ -4,7 +4,7 @@ use diagram::{Branch, Graph, Node, OrderedDiagram};
 use rand::Rng;
 use random::choose_from_iter;
 use std::collections::HashSet;
-use std::collections::hash_map::HashMap;
+use std::collections::hash_map::{Entry, HashMap};
 use std::sync::Arc;
 use walk::PathIter;
 
@@ -470,7 +470,85 @@ fn mutate_n3<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
     where R: Rng
 {
     // Swap adjacent variables in order.
-    return false;
+    if diagram.order.len() < 2 {
+        return false;
+    }
+    let first_variable_index = rng.gen_range(0, diagram.order.len() - 1);
+    let second_variable_index = first_variable_index + 1;
+    let first_variable = diagram.order[first_variable_index];
+    let second_variable = diagram.order[second_variable_index];
+    let mut to_replace = Vec::new();
+    for visit in PathIter::new(diagram, graph) {
+        if let Node::Branch {
+                   low,
+                   high,
+                   variable,
+               } = graph.expand(visit.node) {
+            let low_low;
+            let low_high;
+            let high_low;
+            let high_high;
+            match (graph.expand(low), graph.expand(high)) {
+                (Node::Branch {
+                     low: ll,
+                     high: lh,
+                     variable: lv,
+                 },
+                 Node::Branch {
+                     low: hl,
+                     high: hh,
+                     variable: hv,
+                 }) if lv == second_variable && hv == second_variable => {
+                    low_low = ll;
+                    low_high = lh;
+                    high_low = hl;
+                    high_high = hh;
+                }
+                (Node::Branch {
+                     low: ll,
+                     high: lh,
+                     variable: lv,
+                 },
+                 _) if lv == second_variable => {
+                    low_low = ll;
+                    low_high = lh;
+                    high_low = high;
+                    high_high = high;
+                }
+                (_,
+                 Node::Branch {
+                     low: hl,
+                     high: hh,
+                     variable: hv,
+                 }) if hv == second_variable => {
+                    low_low = low;
+                    low_high = low;
+                    high_low = hl;
+                    high_high = hh;
+                }
+                (_, _) => {
+                    low_low = low;
+                    low_high = low;
+                    high_low = high;
+                    high_high = high;
+                }
+            }
+            to_replace.push((visit.node, low_low, low_high, high_low, high_high));
+        }
+    }
+    let mut replacements: HashMap<usize, usize> = HashMap::new();
+    for (node, ll, lh, hl, hh) in to_replace {
+        if let Entry::Vacant(entry) = replacements.entry(node) {
+            let new_low = graph.branch(first_variable, ll, hl);
+            let new_high = graph.branch(first_variable, lh, hh);
+            let replacement = graph.branch(second_variable, new_low, new_high);
+            entry.insert(replacement);
+        }
+    }
+    Arc::make_mut(&mut diagram.order)[first_variable_index] = second_variable;
+    Arc::make_mut(&mut diagram.order)[second_variable_index] = first_variable;
+    diagram.root = rebuild_diagram_from_replacements(graph, diagram, replacements);
+    return true;
 }
 
 fn mutate_a1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
