@@ -113,26 +113,16 @@ impl StrategySelector {
             }
             (Some((child_0, f_0)), None) => {
                 if parents.0 != parents.1 {
-                    individuals[parents.0] = child_0;
+                    individuals[parents.0] = child_0.clone();
                     fitness[parents.0] = f_0;
-                    individuals.remove(parents.1);
-                    fitness.remove(parents.1);
+                    individuals[parents.1] = child_0;
+                    fitness[parents.1] = f_0;
                 } else {
                     individuals[parents.0] = child_0;
                     fitness[parents.0] = f_0;
                 }
             }
-            (None, None) => {
-                if parents.0 != parents.1 {
-                    individuals.remove(parents.0);
-                    fitness.remove(parents.0);
-                    individuals.remove(parents.1);
-                    fitness.remove(parents.1);
-                } else {
-                    individuals.remove(parents.0);
-                    fitness.remove(parents.0);
-                }
-            }
+            (None, None) => {}
             (None, Some(_)) => unreachable!(),
         }
     }
@@ -175,8 +165,8 @@ pub fn evolve_diagrams<'a, F, R>(rng: &'a mut R,
         let (a, b) = strategy.choose_parents(rng, &diagrams);
         let parent;
         let fitness_parent;
-        let fitness_a = fit[a];
-        let fitness_b = fit[b];
+        let fitness_a = fitness(&graph, &diagrams[a]);
+        let fitness_b = fitness(&graph, &diagrams[b]);
         if fitness_a >= fitness_b {
             parent = diagrams[a].clone();
             fitness_parent = fitness_a;
@@ -216,7 +206,9 @@ pub fn evolve_diagrams<'a, F, R>(rng: &'a mut R,
             } else {
                 fitness_parent
             };
-            strategy.add_child(child, fitness_child);
+            if fitness_child >= fitness_parent {
+                strategy.add_child(child, fitness_child);
+            }
         }
         strategy.output_generation(&mut diagrams, &mut fit);
     }
@@ -272,13 +264,43 @@ fn rebuild_diagram(graph: &mut Graph,
     rebuild_diagram_from_replacements(graph, diagram, replacements)
 }
 
+fn add_parents_if_ready(node: usize,
+                        graph: &Graph,
+                        ready: &mut Vec<usize>,
+                        parent_graph: &HashMap<usize, Vec<usize>>,
+                        replacements: &HashMap<usize, usize>,
+                        ancestor_set: &HashSet<usize>) {
+    for &parent in parent_graph
+            .get(&node)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]) {
+        let Branch {
+            variable,
+            low,
+            high,
+        } = graph.expand_branch(parent);
+        if (!ancestor_set.contains(&low) || replacements.contains_key(&low)) &&
+           (!ancestor_set.contains(&high) || replacements.contains_key(&high)) {
+            ready.push(parent);
+        }
+    }
+}
+
 fn rebuild_diagram_from_replacements(graph: &mut Graph,
                                      diagram: &OrderedDiagram,
                                      mut replacements: HashMap<usize, usize>)
                                      -> usize {
     let parent_graph = make_parent_graph(graph, diagram);
     let ancestor_set = make_ancestor_set(graph, diagram, replacements.keys().cloned());
-    let mut ready: Vec<usize> = replacements.keys().cloned().collect();
+    let mut ready = Vec::new();
+    for &replaced in replacements.keys() {
+        add_parents_if_ready(replaced,
+                             &graph,
+                             &mut ready,
+                             &parent_graph,
+                             &replacements,
+                             &ancestor_set);
+    }
     while let Some(node) = ready.pop() {
         let Branch {
             variable,
@@ -289,20 +311,12 @@ fn rebuild_diagram_from_replacements(graph: &mut Graph,
         let high_replacement = replacements.get(&high).cloned().unwrap_or(high);
         let replacement = graph.branch(variable, low_replacement, high_replacement);
         replacements.insert(node, replacement);
-        for &parent in parent_graph
-                .get(&node)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]) {
-            let Branch {
-                variable,
-                low,
-                high,
-            } = graph.expand_branch(parent);
-            if (!ancestor_set.contains(&low) || replacements.contains_key(&low)) &&
-               (!ancestor_set.contains(&high) || replacements.contains_key(&high)) {
-                ready.push(parent);
-            }
-        }
+        add_parents_if_ready(node,
+                             &graph,
+                             &mut ready,
+                             &parent_graph,
+                             &replacements,
+                             &ancestor_set);
     }
     return *replacements
                 .get(&diagram.root)
@@ -337,20 +351,20 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
 {
     // Insert a random redundant test.
     let parent_graph = make_parent_graph(graph, diagram);
-    if let Some((to_fix, min_variable_idx, next_variable_idx)) =
+    if let Some((to_fix, min_variable_idx, last_allowed_variable_idx)) =
         choose_from_iter(rng,
                          PathIter::new(diagram, graph).filter_map(|visit| {
-            let next_variable;
+            let next_variable_idx;
             if let Node::Branch { variable, .. } = graph.expand(visit.node) {
-                next_variable = variable;
+                let next_variable = variable;
+                next_variable_idx = diagram
+                    .order
+                    .iter()
+                    .position(|&v| v == next_variable)
+                    .expect("All variables should be in the order");
             } else {
-                next_variable = *diagram.order.last().unwrap();
+                next_variable_idx = diagram.order.len();
             }
-            let next_variable_idx = diagram
-                .order
-                .iter()
-                .position(|&v| v == next_variable)
-                .expect("All variables should be in the order");
             let mut max_prev_variable_idx = -1;
             if let Some(parents) = parent_graph.get(&visit.node) {
                 for &parent in parents {
@@ -367,11 +381,11 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
             }
             let min_variable_idx = (max_prev_variable_idx + 1) as usize;
             if next_variable_idx > min_variable_idx {
-                return Some((visit, min_variable_idx, next_variable_idx));
+                return Some((visit, min_variable_idx, next_variable_idx - 1));
             }
             return None;
         })) {
-        let variable_index = rng.gen_range(min_variable_idx, next_variable_idx);
+        let variable_index = rng.gen_range(min_variable_idx, 1 + last_allowed_variable_idx);
         let fixed = graph.branch(diagram.order[variable_index], to_fix.node, to_fix.node);
         // If we didn't replace the root.
         if let Some(&parent) = to_fix.path.last() {
@@ -469,6 +483,7 @@ fn mutate_n2_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
 fn mutate_n3<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
+    return false;
     // Swap adjacent variables in order.
     if diagram.order.len() < 2 {
         return false;
@@ -588,9 +603,10 @@ fn mutate_a1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
                         None
                     }
                 }
-                Node::Leaf { .. } => Some(visit.node),
+                Node::Leaf { .. } => None,
             }
-        })) {
+        })
+                                                   .chain([0, 1].iter().cloned())) {
             if rng.gen() {
                 // Change low.
                 low = target;
@@ -625,8 +641,8 @@ mod tests {
             generations: 10 * pop,
         };
         let params = RDDParams {
-            variable_count: 10,
-            mutation_count: 10,
+            variable_count: 1,
+            mutation_count: 1,
         };
         let zero_bitvec = BitVec::from_elem(params.variable_count, false);
         let fitness = |graph: &_, diagram: &OrderedDiagram| if evaluate_diagram(graph,
@@ -659,7 +675,7 @@ mod tests {
         };
         let params = RDDParams {
             variable_count: 1,
-            mutation_count: 10,
+            mutation_count: 1,
         };
         let zero_bitvec = BitVec::from_elem(params.variable_count, false);
         let one_bitvec = BitVec::from_elem(params.variable_count, true);
@@ -683,12 +699,82 @@ mod tests {
                                              idx))
                     .unwrap();
             render_diagram(&mut f, diagram.clone(), &evolved_population.graph).unwrap();
-            assert_eq!(Branch {
-                           variable: 0,
-                           low: 0,
-                           high: 1,
-                       },
-                       evolved_population.graph.expand_branch(diagram.root));
         }
+    }
+
+    #[test]
+    fn evolve_can_evolve_two_bit_parity() {
+        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let pop = 5;
+        let params = RDDParams {
+            variable_count: 2,
+            mutation_count: 1,
+        };
+        let strategy = EvolutionStrategy::Pairwise {
+            population: pop,
+            generations: 10 * params.variable_count * params.variable_count * 2 * pop,
+        };
+        let zero_bitvec: BitVec = [false, false].iter().cloned().collect();
+        let one_bitvec: BitVec = [true, false].iter().cloned().collect();
+        let two_bitvec: BitVec = [false, true].iter().cloned().collect();
+        let three_bitvec: BitVec = [true, true].iter().cloned().collect();
+        let fitness = |graph: &Graph, diagram: &OrderedDiagram| {
+            let mut f = 0.0;
+            if evaluate_diagram(graph, diagram.root, &zero_bitvec) == false {
+                f += 1.0;
+            }
+            if evaluate_diagram(graph, diagram.root, &one_bitvec) == true {
+                f += 1.0;
+            }
+            if evaluate_diagram(graph, diagram.root, &two_bitvec) == true {
+                f += 1.0;
+            }
+            if evaluate_diagram(graph, diagram.root, &three_bitvec) == false {
+                f += 1.0;
+            }
+            if f > 3.0 {
+                println!("f = {}", f);
+            }
+            return f;
+        };
+        let evolved_population = evolve_diagrams(&mut rng, strategy, params, &fitness);
+        {
+            let mut f = File::create("test_output/evolve_can_evolve_two_bit_parity_graph.dot")
+                .unwrap();
+            render_whole_graph(&mut f, &evolved_population.graph).unwrap();
+        }
+        for (idx, diagram) in evolved_population.diagrams.iter().enumerate() {
+            println!("fitness(diagram[{}]) = {}",
+                     idx,
+                     fitness(&evolved_population.graph, diagram));
+            let mut f = File::create(format!("test_output/diagram_to_compute_two_bit_parity_number{}.dot",
+                                             idx))
+                    .unwrap();
+            render_diagram(&mut f, diagram.clone(), &evolved_population.graph).unwrap();
+        }
+    }
+
+    #[test]
+    fn can_mutate_n1_inv_above_leaf() {
+        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let mut graph = Graph::new();
+        let branch = graph.branch(0, 0, 1);
+        let mut diagram = OrderedDiagram::from_root(branch, 2);
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        assert!(!mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        let mut f = File::create("test_output/can_mutate_n1_inv_above_leaf.dot").unwrap();
+        render_diagram(&mut f, diagram.clone(), &graph).unwrap();
+    }
+
+    #[test]
+    fn can_mutate_n1_inv_at_leaf() {
+        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let mut graph = Graph::new();
+        let mut diagram = OrderedDiagram::from_root(0, 1);
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        assert!(!mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        let mut f = File::create("test_output/can_mutate_n1_inv_at_leaf.dot").unwrap();
+        render_diagram(&mut f, diagram.clone(), &graph).unwrap();
     }
 }
