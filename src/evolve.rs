@@ -1,49 +1,19 @@
 #![allow(unused_variables)]
 use bit_vec::BitVec;
 use diagram::{Branch, Graph, Node, OrderedDiagram};
+use evolution_strategies::{Engine, Problem, Strategy};
 use rand::Rng;
 use random::choose_from_iter;
+use std::cmp::{Ordering, PartialOrd};
 use std::collections::HashSet;
 use std::collections::hash_map::{Entry, HashMap};
 use std::sync::Arc;
 use walk::PathIter;
 
-#[derive(Clone, Copy, Debug)]
-pub enum EvolutionStrategy {
-    Pairwise {
-        population: usize,
-        generations: usize,
-    },
-}
-
-fn population(es: EvolutionStrategy) -> usize {
-    match es {
-        EvolutionStrategy::Pairwise {
-            generations,
-            population,
-        } => population,
-    }
-}
-
-fn generations(es: EvolutionStrategy) -> usize {
-    match es {
-        EvolutionStrategy::Pairwise {
-            generations,
-            population,
-        } => generations,
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct RDDParams {
-    variable_count: usize,
-    mutation_count: usize,
-}
-
-fn generate_branch<R>(rng: &mut R, params: RDDParams, graph: &mut Graph) -> usize
+fn generate_branch<R>(rng: &mut R, variable_count: usize, graph: &mut Graph) -> usize
     where R: Rng
 {
-    let variable = rng.gen_range(0, params.variable_count);
+    let variable = rng.gen_range(0, variable_count);
     let low = rng.gen_range(0, graph.len());
     let high = rng.gen_range(0, graph.len());
     if low == high {
@@ -53,167 +23,126 @@ fn generate_branch<R>(rng: &mut R, params: RDDParams, graph: &mut Graph) -> usiz
     }
 }
 
-struct StrategySelector {
-    strategy: EvolutionStrategy,
-    pending_children: Vec<(OrderedDiagram, f64)>,
-    pending_parents: Option<(usize, usize)>,
+#[derive(Clone, Debug)]
+pub struct DiagramIndividual {
+    fitness: f64,
+    diagram: OrderedDiagram,
 }
 
-impl StrategySelector {
-    fn new(es: EvolutionStrategy) -> Self {
-        StrategySelector {
-            strategy: es,
-            pending_children: Vec::new(),
-            pending_parents: None,
+pub struct DiagramProblem<F>
+    where F: Fn(&Graph, &OrderedDiagram) -> f64
+{
+    variable_count: usize,
+    graph: Graph,
+    fitness: Arc<F>,
+}
+
+impl<F> Clone for DiagramProblem<F>
+    where F: Fn(&Graph, &OrderedDiagram) -> f64
+{
+    fn clone(&self) -> Self {
+        DiagramProblem {
+            variable_count: self.variable_count,
+            graph: self.graph.clone(),
+            fitness: self.fitness.clone(),
         }
     }
+}
 
-    fn choose_parents<R>(&mut self, rng: &mut R, diagrams: &[OrderedDiagram]) -> (usize, usize)
+impl<F> Problem for DiagramProblem<F>
+    where F: Fn(&Graph, &OrderedDiagram) -> f64
+{
+    type Individual = DiagramIndividual;
+    fn initialize<R>(&mut self, count: usize, rng: &mut R) -> Vec<Self::Individual>
         where R: Rng
     {
-        let a_idx = rng.gen_range(0, diagrams.len());
-        let mut b_idx = rng.gen_range(0, diagrams.len());
-        while b_idx == a_idx {
-            b_idx = rng.gen_range(0, diagrams.len());
-        }
-        let result = (a_idx, b_idx);
-        self.pending_parents = Some(result);
-        self.pending_children.clear();
-        result
+
+        (0..count)
+            .map(|_| {
+                let mut order: Vec<_> = (0..self.variable_count).collect();
+                rng.shuffle(&mut order);
+                let root = generate_branch(rng, self.variable_count, &mut self.graph);
+                let diagram = OrderedDiagram {
+                    root,
+                    order: Arc::new(order),
+                };
+                let fitness = (self.fitness)(&self.graph, &diagram);
+                DiagramIndividual { diagram, fitness }
+            })
+            .collect()
     }
 
-    fn add_child(&mut self, child: OrderedDiagram, fitness: f64) {
-        self.pending_children.push((child, fitness));
+    fn mutate<R>(&mut self, child: &mut Self::Individual, rng: &mut R) -> bool
+        where R: Rng
+    {
+        let graph = &mut self.graph;
+        match rng.gen_range(0, 6) {
+            0 => {
+                mutate_n1(rng, &mut child.diagram, graph);
+                false
+            }
+            1 => {
+                mutate_n1_inv(rng, &mut child.diagram, graph);
+                false
+            }
+            2 => {
+                mutate_n2(rng, &mut child.diagram, graph);
+                false
+            }
+            3 => {
+                mutate_n2_inv(rng, &mut child.diagram, graph);
+                false
+            }
+            4 => {
+                mutate_n3(rng, &mut child.diagram, graph);
+                false
+            }
+            5 => {
+                if mutate_a1(rng, &mut child.diagram, graph) {
+                    child.fitness = (self.fitness)(graph, &child.diagram);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => unreachable!(),
+        }
     }
 
-    fn output_generation(&mut self,
-                         individuals: &mut Vec<OrderedDiagram>,
-                         fitness: &mut Vec<f64>) {
-        let parents = self.pending_parents
-            .take()
-            .expect("Need to be in a generation to output it.");
-        let mut children_iter = self.pending_children.drain(..);
-        match (children_iter.next(), children_iter.next()) {
-            (Some((child_0, f_0)), Some((child_1, f_1))) => {
-                if parents.0 != parents.1 {
-                    individuals[parents.0] = child_0;
-                    fitness[parents.0] = f_0;
-                    individuals[parents.1] = child_1;
-                    fitness[parents.1] = f_1;
-                } else {
-                    individuals[parents.0] = child_0;
-                    fitness[parents.0] = f_0;
-                    individuals.push(child_1);
-                    fitness.push(f_1);
-                }
-                for (child, f) in children_iter {
-                    individuals.push(child);
-                    fitness.push(f);
-                }
-            }
-            (Some((child_0, f_0)), None) => {
-                if parents.0 != parents.1 {
-                    individuals[parents.0] = child_0.clone();
-                    fitness[parents.0] = f_0;
-                    individuals[parents.1] = child_0;
-                    fitness[parents.1] = f_0;
-                } else {
-                    individuals[parents.0] = child_0;
-                    fitness[parents.0] = f_0;
-                }
-            }
-            (None, None) => {}
-            (None, Some(_)) => unreachable!(),
-        }
+    fn compare<R>(&mut self,
+                  a: &Self::Individual,
+                  b: &Self::Individual,
+                  _rng: &mut R)
+                  -> Option<Ordering>
+        where R: Rng
+    {
+        a.fitness.partial_cmp(&b.fitness)
     }
 }
 
-pub struct DiagramPopulation {
-    graph: Graph,
-    diagrams: Vec<OrderedDiagram>,
-}
-
-pub fn evolve_diagrams<'a, F, R>(rng: &'a mut R,
-                                 es: EvolutionStrategy,
-                                 params: RDDParams,
-                                 mut fitness: F)
-                                 -> DiagramPopulation
-    where F: FnMut(&Graph, &OrderedDiagram) -> f64,
+pub fn evolve_diagrams<F, R>(rng: R,
+                             strategy: Strategy,
+                             variable_count: usize,
+                             generations: usize,
+                             fitness: F)
+                             -> Engine<DiagramProblem<F>, R>
+    where F: Fn(&Graph, &OrderedDiagram) -> f64,
           R: Rng
 {
-    let pop = population(es);
-    let mut graph = Graph::with_capacity(pop);
-    let mut diagrams: Vec<_> = (0..pop)
-        .map(|_| {
-            let mut order: Vec<_> = (0..params.variable_count).collect();
-            rng.shuffle(&mut order);
-            let root = generate_branch(rng, params, &mut graph);
-            OrderedDiagram {
-                root,
-                order: Arc::new(order),
-            }
-        })
-        .collect();
-    let mut fit = {
-        diagrams
-            .iter()
-            .map(|d| fitness(&graph, d))
-            .collect::<Vec<f64>>()
+    let graph = Graph::new();
+    let problem = DiagramProblem {
+        variable_count,
+        graph,
+        fitness: Arc::new(fitness),
     };
-    let mut strategy = StrategySelector::new(es);
-    for _ in 0..generations(es) {
-        let (a, b) = strategy.choose_parents(rng, &diagrams);
-        let parent;
-        let fitness_parent;
-        let fitness_a = fitness(&graph, &diagrams[a]);
-        let fitness_b = fitness(&graph, &diagrams[b]);
-        if fitness_a >= fitness_b {
-            parent = diagrams[a].clone();
-            fitness_parent = fitness_a;
-        } else {
-            parent = diagrams[b].clone();
-            fitness_parent = fitness_b;
+    let mut engine = Engine::new(problem, strategy, rng);
+    for i in 0..generations {
+        engine.run_generation();
+        if i % 100 == 0 && i > 0 {
+            println!("Completed generation {}", i);
         }
-        let num_children = 2;
-        for _ in 0..num_children {
-            let mut child = parent.clone();
-            let mut adapted = false;
-            for _ in 0..params.mutation_count {
-                match rng.gen_range(0, 6) {
-                    0 => {
-                        mutate_n1(rng, &mut child, &mut graph);
-                    }
-                    1 => {
-                        mutate_n1_inv(rng, &mut child, &mut graph);
-                    }
-                    2 => {
-                        mutate_n2(rng, &mut child, &mut graph);
-                    }
-                    3 => {
-                        mutate_n2_inv(rng, &mut child, &mut graph);
-                    }
-                    4 => {
-                        mutate_n3(rng, &mut child, &mut graph);
-                    }
-                    5 => {
-                        adapted |= mutate_a1(rng, &mut child, &mut graph);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            let fitness_child = if adapted {
-                fitness(&graph, &child)
-            } else {
-                fitness_parent
-            };
-            if fitness_child >= fitness_parent {
-                strategy.add_child(child, fitness_child);
-            }
-        }
-        strategy.output_generation(&mut diagrams, &mut fit);
     }
-
-    return DiagramPopulation { graph, diagrams };
+    engine
 }
 
 fn random_bitvec<R>(rng: &mut R, size: usize) -> BitVec
@@ -318,9 +247,7 @@ fn rebuild_diagram_from_replacements(graph: &mut Graph,
                              &replacements,
                              &ancestor_set);
     }
-    return *replacements
-                .get(&diagram.root)
-                .expect("Should have reached root");
+    return *replacements.get(&diagram.root).unwrap_or(&diagram.root);
 }
 
 fn mutate_n1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
@@ -483,7 +410,6 @@ fn mutate_n2_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
 fn mutate_n3<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) -> bool
     where R: Rng
 {
-    return false;
     // Swap adjacent variables in order.
     if diagram.order.len() < 2 {
         return false;
@@ -634,17 +560,11 @@ mod tests {
 
     #[test]
     fn evolve_can_evolve_1() {
-        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
-        let pop = 2;
-        let strategy = EvolutionStrategy::Pairwise {
-            population: pop,
-            generations: 10 * pop,
-        };
-        let params = RDDParams {
-            variable_count: 1,
-            mutation_count: 1,
-        };
-        let zero_bitvec = BitVec::from_elem(params.variable_count, false);
+        let test_name = "evolve_can_evolve_1";
+        let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let variable_count = 1;
+        let strategy = Strategy::MuLambda { mu: 2, lambda: 5 };
+        let zero_bitvec = BitVec::from_elem(variable_count, false);
         let fitness = |graph: &_, diagram: &OrderedDiagram| if evaluate_diagram(graph,
                                                                                 diagram.root,
                                                                                 &zero_bitvec) {
@@ -652,33 +572,29 @@ mod tests {
         } else {
             return 0.0f64;
         };
-        let evolved_population = evolve_diagrams(&mut rng, strategy, params, fitness);
+        let engine = evolve_diagrams(rng, strategy, variable_count, 10, fitness);
+        let graph = &engine.problem().graph;
         {
-            let mut f = File::create("test_output/evolve_can_evolve_1_graph.dot").unwrap();
-            render_whole_graph(&mut f, &evolved_population.graph).unwrap();
+            let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
+            render_whole_graph(&mut f, &graph).unwrap();
         }
-        for (idx, diagram) in evolved_population.diagrams.iter().enumerate() {
-            let mut f = File::create(format!("test_output/diagram_to_compute_1_number{}.dot", idx))
+        for (idx, diagram) in engine.population().map(|i| &i.diagram).enumerate() {
+            let mut f = File::create(format!("test_output/diagram_{}_{}.dot", test_name, idx))
                 .unwrap();
-            render_diagram(&mut f, diagram.clone(), &evolved_population.graph).unwrap();
-            assert!(evaluate_diagram(&evolved_population.graph, diagram.root, &zero_bitvec));
+            render_diagram(&mut f, diagram.clone(), graph).unwrap();
+            assert!(evaluate_diagram(graph, diagram.root, &zero_bitvec));
         }
     }
 
     #[test]
     fn evolve_can_evolve_identity() {
-        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
-        let pop = 5;
-        let strategy = EvolutionStrategy::Pairwise {
-            population: pop,
-            generations: 2 * pop,
-        };
-        let params = RDDParams {
-            variable_count: 1,
-            mutation_count: 1,
-        };
-        let zero_bitvec = BitVec::from_elem(params.variable_count, false);
-        let one_bitvec = BitVec::from_elem(params.variable_count, true);
+        let test_name = "evolve_can_evolve_identity";
+        let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let variable_count = 1;
+        let strategy = Strategy::MuLambda { mu: 5, lambda: 10 };
+
+        let zero_bitvec = BitVec::from_elem(variable_count, false);
+        let one_bitvec = BitVec::from_elem(variable_count, true);
         let fitness = |graph: &_, diagram: &OrderedDiagram| {
             let mut f = 0.0;
             if evaluate_diagram(graph, diagram.root, &zero_bitvec) == false {
@@ -689,31 +605,26 @@ mod tests {
             }
             return f;
         };
-        let evolved_population = evolve_diagrams(&mut rng, strategy, params, fitness);
+        let engine = evolve_diagrams(rng, strategy, variable_count, 10, fitness);
+        let graph = &engine.problem().graph;
         {
-            let mut f = File::create("test_output/evolve_can_evolve_identity_graph.dot").unwrap();
-            render_whole_graph(&mut f, &evolved_population.graph).unwrap();
+            let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
+            render_whole_graph(&mut f, &graph).unwrap();
         }
-        for (idx, diagram) in evolved_population.diagrams.iter().enumerate() {
-            let mut f = File::create(format!("test_output/diagram_to_compute_identity_number{}.dot",
-                                             idx))
-                    .unwrap();
-            render_diagram(&mut f, diagram.clone(), &evolved_population.graph).unwrap();
+        for (idx, diagram) in engine.population().map(|i| &i.diagram).enumerate() {
+            let mut f = File::create(format!("test_output/diagram_{}_{}.dot", test_name, idx))
+                .unwrap();
+            render_diagram(&mut f, diagram.clone(), graph).unwrap();
+            assert!((engine.problem().fitness)(graph, diagram) == 2.0);
         }
     }
 
     #[test]
     fn evolve_can_evolve_two_bit_parity() {
-        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
-        let pop = 5;
-        let params = RDDParams {
-            variable_count: 2,
-            mutation_count: 1,
-        };
-        let strategy = EvolutionStrategy::Pairwise {
-            population: pop,
-            generations: 10 * params.variable_count * params.variable_count * 2 * pop,
-        };
+        let test_name = "evolve_can_evolve_two_bit_parity";
+        let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let variable_count = 2;
+        let strategy = Strategy::MuLambda { mu: 5, lambda: 10 };
         let zero_bitvec: BitVec = [false, false].iter().cloned().collect();
         let one_bitvec: BitVec = [true, false].iter().cloned().collect();
         let two_bitvec: BitVec = [false, true].iter().cloned().collect();
@@ -737,20 +648,17 @@ mod tests {
             }
             return f;
         };
-        let evolved_population = evolve_diagrams(&mut rng, strategy, params, &fitness);
+        let engine = evolve_diagrams(rng, strategy, variable_count, 10, fitness);
+        let graph = &engine.problem().graph;
         {
-            let mut f = File::create("test_output/evolve_can_evolve_two_bit_parity_graph.dot")
-                .unwrap();
-            render_whole_graph(&mut f, &evolved_population.graph).unwrap();
+            let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
+            render_whole_graph(&mut f, &graph).unwrap();
         }
-        for (idx, diagram) in evolved_population.diagrams.iter().enumerate() {
-            println!("fitness(diagram[{}]) = {}",
-                     idx,
-                     fitness(&evolved_population.graph, diagram));
-            let mut f = File::create(format!("test_output/diagram_to_compute_two_bit_parity_number{}.dot",
-                                             idx))
-                    .unwrap();
-            render_diagram(&mut f, diagram.clone(), &evolved_population.graph).unwrap();
+        for (idx, diagram) in engine.population().map(|i| &i.diagram).enumerate() {
+            let mut f = File::create(format!("test_output/diagram_{}_{}.dot", test_name, idx))
+                .unwrap();
+            render_diagram(&mut f, diagram.clone(), graph).unwrap();
+            //assert!((engine.problem().fitness)(graph, diagram) == 4.0);
         }
     }
 

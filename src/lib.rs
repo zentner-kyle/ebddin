@@ -7,6 +7,7 @@ extern crate vec_map;
 extern crate rand;
 extern crate env_logger;
 extern crate dot;
+extern crate evolution_strategies;
 
 use bit_vec::BitVec;
 
