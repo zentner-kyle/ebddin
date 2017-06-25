@@ -148,6 +148,13 @@ impl OrderedDiagram {
             order: Arc::new((0..variable_count).collect()),
         }
     }
+
+    pub fn variable_index(&self, variable: usize) -> usize {
+        self.order
+            .iter()
+            .position(|&v| v == variable)
+            .expect("All variables should be in the order")
+    }
 }
 
 #[cfg(test)]
