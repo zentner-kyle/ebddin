@@ -334,7 +334,7 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
 {
     // Insert a random redundant test.
     let parent_graph = make_parent_graph(graph, diagram);
-    if let Some((to_fix, min_variable_idx, last_allowed_variable_idx)) =
+    if let Some((to_fix, min_variable_idx, next_variable_idx)) =
         choose_from_iter(rng,
                          visit_paths_preorder(diagram, graph).filter_map(|visit| {
             let next_variable_idx;
@@ -348,27 +348,29 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
             } else {
                 next_variable_idx = diagram.order.len();
             }
-            let mut max_prev_variable_idx = -1;
-            if let Some(parents) = parent_graph.get(&visit.node) {
-                for &parent in parents {
-                    let variable = graph.expand_branch(parent).variable;
-                    let variable_index = diagram
-                        .order
-                        .iter()
-                        .position(|&v| v == variable)
-                        .expect("All variables should be in the order");
-                    if variable_index as isize > max_prev_variable_idx {
-                        max_prev_variable_idx = variable_index as isize;
-                    }
-                }
+            let first_allowed_variable_idx;
+            if let Some(parent) = visit.path.last() {
+                let Branch {
+                    variable,
+                    low,
+                    high,
+                } = graph.expand_branch(*parent);
+                first_allowed_variable_idx = 1 +
+                                             diagram
+                                                 .order
+                                                 .iter()
+                                                 .position(|&v| v == variable)
+                                                 .expect("All variables should be in the order");
+            } else {
+                first_allowed_variable_idx = 0;
             }
-            let min_variable_idx = (max_prev_variable_idx + 1) as usize;
-            if next_variable_idx > min_variable_idx {
-                return Some((visit, min_variable_idx, next_variable_idx - 1));
+            if first_allowed_variable_idx < next_variable_idx {
+                Some((visit, first_allowed_variable_idx, next_variable_idx))
+            } else {
+                None
             }
-            return None;
         })) {
-        let variable_index = rng.gen_range(min_variable_idx, 1 + last_allowed_variable_idx);
+        let variable_index = rng.gen_range(min_variable_idx, next_variable_idx);
         let fixed = graph.branch(diagram.order[variable_index], to_fix.node, to_fix.node);
         // If we didn't replace the root.
         if let Some(&parent) = to_fix.path.last() {
@@ -713,7 +715,7 @@ mod tests {
             }
             return f;
         };
-        let engine = evolve_diagrams(rng, strategy, variable_count, 200, fitness);
+        let engine = evolve_diagrams(rng, strategy, variable_count, 100, fitness);
         let graph = &engine.problem().graph;
         {
             let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
@@ -723,7 +725,7 @@ mod tests {
             let mut f = File::create(format!("test_output/diagram_{}_{}.dot", test_name, idx))
                 .unwrap();
             render_diagram(&mut f, diagram.clone(), graph).unwrap();
-            //assert!((engine.problem().fitness)(graph, diagram) == 4.0);
+            assert!((engine.problem().fitness)(graph, diagram) == 4.0);
         }
     }
 
@@ -751,6 +753,42 @@ mod tests {
         assert!(!mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
         let mut f = File::create("test_output/can_mutate_n1_inv_at_leaf.dot").unwrap();
         render_diagram(&mut f, diagram.clone(), &graph).unwrap();
+    }
+
+    #[test]
+    fn can_mutate_n1_inv_to_full_tree() {
+        let _ = env_logger::init();
+        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let mut graph = Graph::new();
+        let mut diagram = OrderedDiagram::from_root(0, 2);
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        assert!(!mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        write_diagram("test_output/can_mutate_n1_inv_to_full_tree.dot",
+                      &diagram,
+                      &graph);
+    }
+
+    #[test]
+    fn can_mutate_n2_inv() {
+        let _ = env_logger::init();
+        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let mut graph = Graph::new();
+        let mut diagram = OrderedDiagram::from_root(0, 2);
+        // Build a full tree.
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
+        // Merge equivalent middle nodes.
+        mutate_n2(&mut rng, &mut diagram, &mut graph);
+        // Unmerge equivalent middle nodes.
+        assert!(mutate_n2_inv(&mut rng, &mut diagram, &mut graph));
+        // Can't unmerge equivalent middle nodes again.
+        assert!(!mutate_n2_inv(&mut rng, &mut diagram, &mut graph));
+        write_diagram("test_output/can_mutate_n2_inv_at_leaf.dot",
+                      &diagram,
+                      &graph);
     }
 
     #[test]
