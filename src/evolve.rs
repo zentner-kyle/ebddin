@@ -84,35 +84,33 @@ impl<F> Problem for DiagramProblem<F>
         child.generation += 1;
         match rng.gen_range(0, 6) {
             0 => {
-                //mutate_n1(rng, &mut child.diagram, graph);
-                false
+                mutate_n1(rng, &mut child.diagram, graph);
+                assert!(child.fitness == (self.fitness)(graph, &child.diagram));
             }
             1 => {
                 mutate_n1_inv(rng, &mut child.diagram, graph);
-                false
+                assert!(child.fitness == (self.fitness)(graph, &child.diagram));
             }
             2 => {
-                //mutate_n2(rng, &mut child.diagram, graph);
-                false
+                mutate_n2(rng, &mut child.diagram, graph);
+                assert!(child.fitness == (self.fitness)(graph, &child.diagram));
             }
             3 => {
                 mutate_n2_inv(rng, &mut child.diagram, graph);
-                false
+                assert!(child.fitness == (self.fitness)(graph, &child.diagram));
             }
             4 => {
-                //mutate_n3(rng, &mut child.diagram, graph);
-                false
+                mutate_n3(rng, &mut child.diagram, graph);
+                assert!(child.fitness == (self.fitness)(graph, &child.diagram));
             }
             5 => {
                 if mutate_a1(rng, &mut child.diagram, graph) {
                     child.fitness = (self.fitness)(graph, &child.diagram);
-                    true
-                } else {
-                    false
                 }
             }
             _ => unreachable!(),
         }
+        true
     }
 
     fn compare<R>(&mut self,
@@ -122,9 +120,10 @@ impl<F> Problem for DiagramProblem<F>
                   -> Option<Ordering>
         where R: Rng
     {
-        a.fitness
-            .partial_cmp(&b.fitness)
-            .or(a.generation.partial_cmp(&b.generation))
+        let generation_cmp = a.generation.cmp(&b.generation);
+        return Some(a.fitness
+                        .partial_cmp(&b.fitness)
+                        .map_or(generation_cmp, |c| c.then(generation_cmp)));
     }
 
     fn maintain<R>(&mut self, population: PopulationIterMut<Self::Individual>, rng: &mut R) -> bool
@@ -416,7 +415,7 @@ fn mutate_n2<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
                             low: high_low,
                             high: high_high,
                             ..
-                        }) = (graph.expand(low), graph.expand(low)) {
+                        }) = (graph.expand(low), graph.expand(high)) {
                     if low_low == high_low && low_high == high_high {
                         return Some((path, variable, low));
                     }
@@ -691,7 +690,7 @@ mod tests {
         let test_name = "evolve_can_evolve_two_bit_parity";
         let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let variable_count = 2;
-        let strategy = Strategy::MuLambda { mu: 5, lambda: 10 };
+        let strategy = Strategy::MuPlusLambda { mu: 1, lambda: 10 };
         let zero_bitvec: BitVec = [false, false].iter().cloned().collect();
         let one_bitvec: BitVec = [true, false].iter().cloned().collect();
         let two_bitvec: BitVec = [false, true].iter().cloned().collect();
@@ -710,12 +709,9 @@ mod tests {
             if evaluate_diagram(graph, diagram.root, &three_bitvec) == false {
                 f += 1.0;
             }
-            if f > 3.0 {
-                println!("f = {}", f);
-            }
             return f;
         };
-        let engine = evolve_diagrams(rng, strategy, variable_count, 100, fitness);
+        let engine = evolve_diagrams(rng, strategy, variable_count, 50, fitness);
         let graph = &engine.problem().graph;
         {
             let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
