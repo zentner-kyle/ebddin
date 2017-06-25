@@ -1,14 +1,14 @@
 #![allow(unused_variables)]
 use bit_vec::BitVec;
 use diagram::{Branch, Graph, Node, OrderedDiagram};
-use evolution_strategies::{Engine, Problem, Strategy};
+use evolution_strategies::{Engine, PopulationIterMut, Problem, Strategy};
 use rand::Rng;
 use random::choose_from_iter;
 use std::cmp::{Ordering, PartialOrd};
 use std::collections::HashSet;
 use std::collections::hash_map::{Entry, HashMap};
 use std::sync::Arc;
-use walk::PathIter;
+use walk::{visit_paths_postorder, visit_paths_preorder};
 
 fn generate_branch<R>(rng: &mut R, variable_count: usize, graph: &mut Graph) -> usize
     where R: Rng
@@ -26,6 +26,7 @@ fn generate_branch<R>(rng: &mut R, variable_count: usize, graph: &mut Graph) -> 
 #[derive(Clone, Debug)]
 pub struct DiagramIndividual {
     fitness: f64,
+    generation: usize,
     diagram: OrderedDiagram,
 }
 
@@ -67,7 +68,11 @@ impl<F> Problem for DiagramProblem<F>
                     order: Arc::new(order),
                 };
                 let fitness = (self.fitness)(&self.graph, &diagram);
-                DiagramIndividual { diagram, fitness }
+                DiagramIndividual {
+                    generation: 0,
+                    diagram,
+                    fitness,
+                }
             })
             .collect()
     }
@@ -76,9 +81,10 @@ impl<F> Problem for DiagramProblem<F>
         where R: Rng
     {
         let graph = &mut self.graph;
+        child.generation += 1;
         match rng.gen_range(0, 6) {
             0 => {
-                mutate_n1(rng, &mut child.diagram, graph);
+                //mutate_n1(rng, &mut child.diagram, graph);
                 false
             }
             1 => {
@@ -86,7 +92,7 @@ impl<F> Problem for DiagramProblem<F>
                 false
             }
             2 => {
-                mutate_n2(rng, &mut child.diagram, graph);
+                //mutate_n2(rng, &mut child.diagram, graph);
                 false
             }
             3 => {
@@ -94,7 +100,7 @@ impl<F> Problem for DiagramProblem<F>
                 false
             }
             4 => {
-                mutate_n3(rng, &mut child.diagram, graph);
+                //mutate_n3(rng, &mut child.diagram, graph);
                 false
             }
             5 => {
@@ -116,7 +122,50 @@ impl<F> Problem for DiagramProblem<F>
                   -> Option<Ordering>
         where R: Rng
     {
-        a.fitness.partial_cmp(&b.fitness)
+        a.fitness
+            .partial_cmp(&b.fitness)
+            .or(a.generation.partial_cmp(&b.generation))
+    }
+
+    fn maintain<R>(&mut self, population: PopulationIterMut<Self::Individual>, rng: &mut R) -> bool
+        where R: Rng
+    {
+        let mut new_graph = Graph::new();
+        let mut replacements: HashMap<usize, usize> = [(0usize, 0usize), (1usize, 1usize)]
+            .iter()
+            .cloned()
+            .collect();
+        for individual in population {
+            for visit in visit_paths_postorder(&individual.diagram, &self.graph) {
+                let replacement = if let Node::Branch {
+                           variable,
+                           low,
+                           high,
+                       } = self.graph.expand(visit.node) {
+                    let new_low = *replacements
+                                       .get(&low)
+                                       .expect("should have already visited due to postorder");
+                    let new_high = *replacements
+                                        .get(&high)
+                                        .expect("should have already visited due to postorder");
+                    match replacements.entry(visit.node) {
+                        Entry::Vacant(entry) => {
+                            let replacement = new_graph.branch(variable, new_low, new_high);
+                            entry.insert(replacement);
+                            replacement
+                        }
+                        Entry::Occupied(entry) => *entry.get(),
+                    }
+                } else {
+                    visit.node
+                };
+                if visit.node == individual.diagram.root {
+                    individual.diagram.root = replacement;
+                }
+            }
+        }
+        self.graph = new_graph;
+        return true;
     }
 }
 
@@ -140,6 +189,7 @@ pub fn evolve_diagrams<F, R>(rng: R,
         engine.run_generation();
         if i % 100 == 0 && i > 0 {
             println!("Completed generation {}", i);
+            engine.maintain();
         }
     }
     engine
@@ -157,7 +207,7 @@ fn random_bitvec<R>(rng: &mut R, size: usize) -> BitVec
 
 fn make_parent_graph(graph: &Graph, diagram: &OrderedDiagram) -> HashMap<usize, Vec<usize>> {
     let mut parent_graph = HashMap::new();
-    for visit in PathIter::new(diagram, graph) {
+    for visit in visit_paths_preorder(diagram, graph) {
         if let Some(parent) = visit.path.last() {
             parent_graph
                 .entry(visit.node)
@@ -173,7 +223,7 @@ fn make_ancestor_set<I>(graph: &Graph, diagram: &OrderedDiagram, nodes: I) -> Ha
 {
     let roots: HashSet<usize> = nodes.collect();
     let mut ancestors = HashSet::new();
-    for visit in PathIter::new(diagram, graph) {
+    for visit in visit_paths_preorder(diagram, graph) {
         if roots.contains(&visit.node) {
             for node in visit.path.as_slice() {
                 ancestors.insert(*node);
@@ -262,7 +312,7 @@ fn mutate_n1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
     // Remove a random redundant test.
     if let Some((to_fix, replacement)) =
         choose_from_iter(rng,
-                         PathIter::new(diagram, graph).filter_map(|path| {
+                         visit_paths_preorder(diagram, graph).filter_map(|path| {
             match graph.expand(path.node) {
                 Node::Branch {
                     variable: _,
@@ -286,7 +336,7 @@ fn mutate_n1_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
     let parent_graph = make_parent_graph(graph, diagram);
     if let Some((to_fix, min_variable_idx, last_allowed_variable_idx)) =
         choose_from_iter(rng,
-                         PathIter::new(diagram, graph).filter_map(|visit| {
+                         visit_paths_preorder(diagram, graph).filter_map(|visit| {
             let next_variable_idx;
             if let Node::Branch { variable, .. } = graph.expand(visit.node) {
                 let next_variable = variable;
@@ -349,7 +399,7 @@ fn mutate_n2<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
     // Remove a redundant non-terminal.
     if let Some((to_fix, variable, child)) =
         choose_from_iter(rng,
-                         PathIter::new(diagram, graph).filter_map(|path| {
+                         visit_paths_preorder(diagram, graph).filter_map(|path| {
             if let Node::Branch {
                        variable,
                        low,
@@ -386,7 +436,7 @@ fn mutate_n2_inv<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph
     // Insert a redundant non-terminal.
     if let Some((to_fix, variable, (child, child_variable, low, high))) =
         choose_from_iter(rng,
-                         PathIter::new(diagram, graph).filter_map(|path| {
+                         visit_paths_preorder(diagram, graph).filter_map(|path| {
             if let Node::Branch {
                        low,
                        high,
@@ -425,7 +475,7 @@ fn mutate_n3<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
     let first_variable = diagram.order[first_variable_index];
     let second_variable = diagram.order[second_variable_index];
     let mut to_replace = Vec::new();
-    for visit in PathIter::new(diagram, graph) {
+    for visit in visit_paths_preorder(diagram, graph) {
         if let Node::Branch {
                    low,
                    high,
@@ -504,7 +554,7 @@ fn mutate_a1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
     // Change a random non-terminal to point to a new vertex with a later variable.
     if let Some((to_fix, target_variable, mut low, mut high)) =
         choose_from_iter(rng,
-                         PathIter::new(diagram, graph).filter_map(|path| {
+                         visit_paths_preorder(diagram, graph).filter_map(|path| {
             if let Node::Branch {
                        low,
                        high,
@@ -520,7 +570,7 @@ fn mutate_a1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
             .position(|&v| v == target_variable)
             .expect("All variables should be in the order");
         if let Some(target) = choose_from_iter(rng,
-                                               PathIter::new(diagram, graph)
+                                               visit_paths_preorder(diagram, graph)
                                                    .filter_map(|visit| {
             match graph.expand(visit.node) {
                 Node::Branch { variable, .. } => {
@@ -558,6 +608,7 @@ fn mutate_a1<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use env_logger;
     use evaluate_diagram;
     use rand::SeedableRng;
     use rand::XorShiftRng;
@@ -571,6 +622,7 @@ mod tests {
 
     #[test]
     fn evolve_can_evolve_1() {
+        let _ = env_logger::init();
         let test_name = "evolve_can_evolve_1";
         let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let variable_count = 1;
@@ -599,6 +651,7 @@ mod tests {
 
     #[test]
     fn evolve_can_evolve_identity() {
+        let _ = env_logger::init();
         let test_name = "evolve_can_evolve_identity";
         let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let variable_count = 1;
@@ -632,10 +685,11 @@ mod tests {
 
     #[test]
     fn evolve_can_evolve_two_bit_parity() {
+        let _ = env_logger::init();
         let test_name = "evolve_can_evolve_two_bit_parity";
         let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let variable_count = 2;
-        let strategy = Strategy::MuPlusLambda { mu: 5, lambda: 10 };
+        let strategy = Strategy::MuLambda { mu: 5, lambda: 10 };
         let zero_bitvec: BitVec = [false, false].iter().cloned().collect();
         let one_bitvec: BitVec = [true, false].iter().cloned().collect();
         let two_bitvec: BitVec = [false, true].iter().cloned().collect();
@@ -659,7 +713,7 @@ mod tests {
             }
             return f;
         };
-        let engine = evolve_diagrams(rng, strategy, variable_count, 10, fitness);
+        let engine = evolve_diagrams(rng, strategy, variable_count, 200, fitness);
         let graph = &engine.problem().graph;
         {
             let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
@@ -675,6 +729,7 @@ mod tests {
 
     #[test]
     fn can_mutate_n1_inv_above_leaf() {
+        let _ = env_logger::init();
         let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let mut graph = Graph::new();
         let branch = graph.branch(0, 0, 1);
@@ -688,6 +743,7 @@ mod tests {
 
     #[test]
     fn can_mutate_n1_inv_at_leaf() {
+        let _ = env_logger::init();
         let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let mut graph = Graph::new();
         let mut diagram = OrderedDiagram::from_root(0, 1);
@@ -699,6 +755,7 @@ mod tests {
 
     #[test]
     fn can_mutate_n3_2_bit_parity() {
+        let _ = env_logger::init();
         let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let mut graph = Graph::new();
         let low = graph.branch(1, 0, 1);

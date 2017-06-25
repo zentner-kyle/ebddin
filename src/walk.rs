@@ -10,23 +10,47 @@ pub struct PathIter<'a> {
     node: usize,
     graph: &'a Graph,
     go_up: bool,
+    postorder: bool,
 }
 
 impl<'a> PathIter<'a> {
     pub fn new<'d>(diagram: &'d OrderedDiagram, graph: &'a Graph) -> Self {
-        let variable_count = diagram.order.len();
-        let tree_height_guess = variable_count;
-        PathIter {
-            visit_count: Vec::with_capacity(tree_height_guess),
-            path: Rc::new(Vec::with_capacity(tree_height_guess)),
-            variables: Rc::new(vec![None; variable_count]),
-            variable_set_depth: vec![0; variable_count],
-            node: diagram.root,
-            graph,
-            go_up: false,
-        }
+        visit_paths_preorder(diagram, graph)
     }
 }
+
+pub fn visit_paths_preorder<'d, 'g>(diagram: &'d OrderedDiagram, graph: &'g Graph) -> PathIter<'g> {
+    let variable_count = diagram.order.len();
+    let tree_height_guess = variable_count;
+    PathIter {
+        visit_count: Vec::with_capacity(tree_height_guess),
+        path: Rc::new(Vec::with_capacity(tree_height_guess)),
+        variables: Rc::new(vec![None; variable_count]),
+        variable_set_depth: vec![0; variable_count],
+        node: diagram.root,
+        graph,
+        go_up: false,
+        postorder: false,
+    }
+}
+
+pub fn visit_paths_postorder<'d, 'g>(diagram: &'d OrderedDiagram,
+                                     graph: &'g Graph)
+                                     -> PathIter<'g> {
+    let variable_count = diagram.order.len();
+    let tree_height_guess = variable_count;
+    PathIter {
+        visit_count: Vec::with_capacity(tree_height_guess),
+        path: Rc::new(Vec::with_capacity(tree_height_guess)),
+        variables: Rc::new(vec![None; variable_count]),
+        variable_set_depth: vec![0; variable_count],
+        node: diagram.root,
+        graph,
+        go_up: false,
+        postorder: true,
+    }
+}
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Path {
@@ -99,6 +123,39 @@ impl<'a> PathIter<'a> {
         }
         self.visit_count[depth] += 1;
     }
+
+    fn get_operation(&self) -> VisitOperation {
+        let depth = self.depth();
+        if self.postorder {
+            match self.visit_count.get(depth).cloned().unwrap_or(0) {
+                1 => VisitOperation::GoLow,
+                2 => VisitOperation::GoHigh,
+                3 => VisitOperation::Visit,
+                4 => VisitOperation::GoUp,
+                i => {
+                    println!("i = {}", i);
+                    unreachable!();
+                }
+            }
+        } else {
+            match self.visit_count.get(depth).cloned().unwrap_or(0) {
+                1 => VisitOperation::Visit,
+                2 => VisitOperation::GoLow,
+                3 => VisitOperation::GoHigh,
+                4 => VisitOperation::GoUp,
+                _ => {
+                    unreachable!();
+                }
+            }
+        }
+    }
+}
+
+enum VisitOperation {
+    Visit,
+    GoHigh,
+    GoLow,
+    GoUp,
 }
 
 impl<'a> Iterator for PathIter<'a> {
@@ -111,22 +168,11 @@ impl<'a> Iterator for PathIter<'a> {
         // On a leaf, go up. Mark the result node as visited once and go down/left.
         // If node has already been visited once, go up again instead.
         loop {
-            let depth = self.path.len();
+            let depth = self.depth();
             let visited_once = self.visited_once();
-            let visited_twice = self.visited_twice();
-            let visited_thrice = self.visited_thrice();
             debug!("======");
             self.mark();
             debug!("node# {}", self.node);
-            if visited_once {
-                debug!("visited once");
-            }
-            if visited_twice {
-                debug!("visited twice");
-            }
-            if visited_thrice {
-                debug!("visited thrice");
-            }
             match self.graph.expand(self.node) {
                 Node::Leaf { value } => {
                     debug!("leaf");
@@ -146,14 +192,13 @@ impl<'a> Iterator for PathIter<'a> {
                     low,
                     high,
                 } => {
-                    if let Some(value) = self.variables[variable].clone() {
-                        debug!("variable {} has value {}", variable, value);
-                        let variable_set_here = self.variable_set_depth[variable] == depth;
-                        if variable_set_here {
-                            debug!("variable set here");
-                        }
-                        if visited_thrice {
-                            debug!("do visited thrice");
+                    let variable_set_here = self.variable_set_depth[variable] == depth;
+                    if variable_set_here {
+                        debug!("variable set here");
+                    }
+                    match self.get_operation() {
+                        VisitOperation::GoUp => {
+                            debug!("go up");
                             if variable_set_here {
                                 debug!("unsetting variable {}", variable);
                                 Rc::make_mut(&mut self.variables)[variable] = None;
@@ -162,31 +207,33 @@ impl<'a> Iterator for PathIter<'a> {
                                 debug!("done");
                                 return None;
                             }
-                        } else if visited_twice {
+                        }
+                        VisitOperation::GoHigh => {
+                            debug!("go high");
                             if variable_set_here {
                                 debug!("visiting high child");
                                 debug!("setting variable {} to true", variable);
                                 Rc::make_mut(&mut self.variables)[variable] = Some(true);
                                 self.go_down(high);
                             }
-                        } else if visited_once {
-                            debug!("do visited once");
+                        }
+                        VisitOperation::GoLow => {
+                            debug!("go low");
+                            let value = if let Some(value) = self.variables[variable].clone() {
+                                debug!("variable {} has value {}", variable, value);
+                                value
+                            } else {
+                                debug!("variable {} has no value", variable);
+                                debug!("setting variable {} to false", variable);
+                                self.variable_set_depth[variable] = depth;
+                                Rc::make_mut(&mut self.variables)[variable] = Some(false);
+                                false
+                            };
                             debug!("going down following value {}", value);
                             self.go_down(if value { high } else { low })
-                        } else {
-                            debug!("not visited before, output path");
-                            return Some(Path::new(&self.path, &self.variables, self.node, None));
                         }
-                    } else {
-                        debug!("variable {} has no value", variable);
-                        if visited_once {
-                            debug!("do visited once");
-                            debug!("setting variable {} to false", variable);
-                            self.variable_set_depth[variable] = depth;
-                            Rc::make_mut(&mut self.variables)[variable] = Some(false);
-                            self.go_down(low);
-                        } else {
-                            debug!("not visited before, output path");
+                        VisitOperation::Visit => {
+                            debug!("visit");
                             return Some(Path::new(&self.path, &self.variables, self.node, None));
                         }
                     }
