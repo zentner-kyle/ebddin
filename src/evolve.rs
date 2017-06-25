@@ -238,14 +238,20 @@ fn rebuild_diagram_from_replacements(graph: &mut Graph,
         } = graph.expand_branch(node);
         let low_replacement = replacements.get(&low).cloned().unwrap_or(low);
         let high_replacement = replacements.get(&high).cloned().unwrap_or(high);
-        let replacement = graph.branch(variable, low_replacement, high_replacement);
-        replacements.insert(node, replacement);
-        add_parents_if_ready(node,
-                             &graph,
-                             &mut ready,
-                             &parent_graph,
-                             &replacements,
-                             &ancestor_set);
+        let mut inserted = false;
+        if let Entry::Vacant(entry) = replacements.entry(node) {
+            let replacement = graph.branch(variable, low_replacement, high_replacement);
+            entry.insert(replacement);
+            inserted = true;
+        }
+        if inserted {
+            add_parents_if_ready(node,
+                                 &graph,
+                                 &mut ready,
+                                 &parent_graph,
+                                 &replacements,
+                                 &ancestor_set);
+        }
     }
     return *replacements.get(&diagram.root).unwrap_or(&diagram.root);
 }
@@ -558,6 +564,11 @@ mod tests {
     use render::{render_diagram, render_whole_graph};
     use std::fs::File;
 
+    fn write_diagram(name: &str, diagram: &OrderedDiagram, graph: &Graph) {
+        let mut f = File::create(name).unwrap();
+        render_diagram(&mut f, diagram.clone(), graph).unwrap();
+    }
+
     #[test]
     fn evolve_can_evolve_1() {
         let test_name = "evolve_can_evolve_1";
@@ -624,7 +635,7 @@ mod tests {
         let test_name = "evolve_can_evolve_two_bit_parity";
         let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let variable_count = 2;
-        let strategy = Strategy::MuLambda { mu: 5, lambda: 10 };
+        let strategy = Strategy::MuPlusLambda { mu: 5, lambda: 10 };
         let zero_bitvec: BitVec = [false, false].iter().cloned().collect();
         let one_bitvec: BitVec = [true, false].iter().cloned().collect();
         let two_bitvec: BitVec = [false, true].iter().cloned().collect();
@@ -683,6 +694,22 @@ mod tests {
         assert!(mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
         assert!(!mutate_n1_inv(&mut rng, &mut diagram, &mut graph));
         let mut f = File::create("test_output/can_mutate_n1_inv_at_leaf.dot").unwrap();
+        render_diagram(&mut f, diagram.clone(), &graph).unwrap();
+    }
+
+    #[test]
+    fn can_mutate_n3_2_bit_parity() {
+        let mut rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let mut graph = Graph::new();
+        let low = graph.branch(1, 0, 1);
+        let high = graph.branch(1, 1, 0);
+        let root = graph.branch(0, low, high);
+        let mut diagram = OrderedDiagram::from_root(root, 2);
+        write_diagram("test_output/can_mutate_n3_2_bit_parity_before.dot",
+                      &diagram,
+                      &graph);
+        assert!(mutate_n3(&mut rng, &mut diagram, &mut graph));
+        let mut f = File::create("test_output/can_mutate_n3_2_bit_parity.dot").unwrap();
         render_diagram(&mut f, diagram.clone(), &graph).unwrap();
     }
 }

@@ -27,8 +27,8 @@ fn node_label(graph: &Graph, n: &Nd) -> dot::LabelText<'static> {
             variable,
             low: _,
             high: _,
-        } => dot::LabelText::label(format!("Branch({})", variable)),
-        Node::Leaf { value } => dot::LabelText::label(format!("Leaf({})", value)),
+        } => dot::LabelText::label(format!("[{}]: Branch({})", *n, variable)),
+        Node::Leaf { value } => dot::LabelText::label(format!("[{}]: Leaf({})", *n, value)),
     }
 }
 
