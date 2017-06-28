@@ -1,6 +1,7 @@
 use diagram::{Graph, Node, OrderedDiagram};
 use dot;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::io;
 use walk::PathIter;
 
@@ -66,18 +67,18 @@ impl<'a> dot::GraphWalk<'a, Nd, Ed> for DiagramRenderer<'a> {
     }
 
     fn edges(&'a self) -> dot::Edges<'a, Ed> {
-        let mut edges = Vec::new();
+        let mut edges = HashSet::new();
         for path in PathIter::new(&self.diagram, self.graph) {
             if let Node::Branch {
                        variable: _,
                        low,
                        high,
                    } = self.graph.expand(path.node) {
-                edges.push((path.node, false, low));
-                edges.push((path.node, true, high));
+                edges.insert((path.node, false, low));
+                edges.insert((path.node, true, high));
             }
         }
-        return Cow::Owned(edges);
+        return Cow::Owned(edges.into_iter().collect());
     }
 
     fn source<'b>(&'a self, e: &'b Ed) -> Nd {
