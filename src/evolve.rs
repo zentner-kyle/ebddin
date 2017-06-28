@@ -93,33 +93,31 @@ impl<F> Problem for DiagramProblem<F>
         #[cfg(debug_assertions)]
         write_diagram("before.dot", &child.diagram, graph);
         debug!("order before = {:#?}", child.diagram.order);
-        match rng.gen_range(0, 6) {
-            0 => {
-                debug!("n1");
-                mutate_n1(rng, &mut child.diagram, graph);
+        let weights = [1.05, 1.0, 1.05, 1.0, 0.0, 2.0];
+        let total: f64 = weights.iter().sum();
+        let choice = rng.next_f64() * total;
+        if choice <= weights[0..1].iter().sum() {
+            debug!("n1");
+            mutate_n1(rng, &mut child.diagram, graph);
+        } else if choice <= weights[0..2].iter().sum() {
+            debug!("n1_inv");
+            mutate_n1_inv(rng, &mut child.diagram, graph);
+        } else if choice <= weights[0..3].iter().sum() {
+            debug!("n2");
+            mutate_n2(rng, &mut child.diagram, graph);
+        } else if choice <= weights[0..4].iter().sum() {
+            debug!("n2_inv");
+            mutate_n2_inv(rng, &mut child.diagram, graph);
+        } else if choice <= weights[0..5].iter().sum() {
+            debug!("n3");
+            mutate_n3(rng, &mut child.diagram, graph);
+        } else if choice <= weights[0..6].iter().sum() {
+            debug!("a1");
+            if mutate_a1(rng, &mut child.diagram, graph) {
+                child.fitness = (self.fitness)(graph, &child.diagram);
             }
-            1 => {
-                debug!("n1_inv");
-                mutate_n1_inv(rng, &mut child.diagram, graph);
-            }
-            2 => {
-                debug!("n2");
-                mutate_n2(rng, &mut child.diagram, graph);
-            }
-            3 => {
-                debug!("n2_inv");
-                mutate_n2_inv(rng, &mut child.diagram, graph);
-            }
-            4 => {
-                debug!("n3");
-                mutate_n3(rng, &mut child.diagram, graph);
-            }
-            5 => {
-                if mutate_a1(rng, &mut child.diagram, graph) {
-                    child.fitness = (self.fitness)(graph, &child.diagram);
-                }
-            }
-            _ => unreachable!(),
+        } else {
+            unreachable!();
         }
         debug!("order after = {:#?}", child.diagram.order);
         #[cfg(debug_assertions)]
@@ -155,7 +153,6 @@ impl<F> Problem for DiagramProblem<F>
             .cloned()
             .collect();
         for individual in population {
-            write_diagram("bad.dot", &individual.diagram, &self.graph);
             for visit in visit_paths_postorder(&individual.diagram, &self.graph) {
                 let replacement = if let Node::Branch {
                            variable,
@@ -205,11 +202,16 @@ pub fn evolve_diagrams<F, R>(rng: R,
         fitness,
     };
     let mut engine = Engine::new(problem, strategy, rng);
-    for i in 0..generations {
+    for i in 1..(1 + generations) {
         engine.run_generation();
-        if i % 100 == 0 && i > 0 {
-            println!("Completed generation {}", i);
+        if i % 50 == 0 {
             engine.maintain();
+        }
+        if i % 100 == 0 {
+            write_diagram("checkpoint.dot",
+                          &engine.fitest().diagram,
+                          &engine.problem().graph);
+            println!("Completed generation {}", i);
         }
     }
     engine
@@ -429,33 +431,24 @@ fn mutate_n2<R>(rng: &mut R, diagram: &mut OrderedDiagram, graph: &mut Graph) ->
     where R: Rng
 {
     // Remove a redundant non-terminal.
-    if let Some((to_fix, variable, child)) =
-        choose_from_iter(rng,
-                         visit_paths_preorder(diagram, graph).filter_map(|path| {
-            if let Node::Branch {
-                       variable,
-                       low,
-                       high,
-                   } = graph.expand(path.node) {
-                if let (Node::Branch {
-                            low: low_low,
-                            high: low_high,
-                            ..
-                        },
-                        Node::Branch {
-                            low: high_low,
-                            high: high_high,
-                            ..
-                        }) = (graph.expand(low), graph.expand(high)) {
-                    if low_low == high_low && low_high == high_high {
-                        return Some((path, variable, low));
+    let parent_graph = make_parent_graph(graph, diagram);
+    if let Some((a, b)) = choose_from_iter(rng,
+                                           visit_paths_preorder(diagram, graph)
+                                               .flat_map(|visit| {
+        let mut overlaps = Vec::new();
+        if let Some(parents) = parent_graph.get(&visit.node) {
+            for (i, parent) in parents.iter().enumerate() {
+                let branch = graph.expand_branch(*parent);
+                for parent2 in &parents[0..i] {
+                    if *parent != *parent2 && graph.expand_branch(*parent2) == branch {
+                        overlaps.push((*parent, *parent2));
                     }
                 }
             }
-            return None;
-        })) {
-        let replacement = graph.branch(variable, child, child);
-        diagram.root = rebuild_diagram(graph, diagram, to_fix.node, replacement);
+        }
+        overlaps.into_iter()
+    })) {
+        diagram.root = rebuild_diagram(graph, diagram, a, b);
         return true;
     } else {
         return false;
@@ -749,26 +742,29 @@ mod tests {
     }
 
     #[test]
-    fn evolve_can_evolve_twenty_bit_parity() {
+    fn evolve_can_evolve_eight_bit_parity() {
         let _ = env_logger::init();
         let test_name = "evolve_can_evolve_twenty_bit_parity";
         let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
-        let variable_count = 5;
+        let variable_count = 8;
         let strategy = Strategy::MuPlusLambda { mu: 1, lambda: 10 };
         let mut fitness_rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let num_challenges = 10000;
+        let bitvecs: Vec<BitVec> = (0..num_challenges)
+            .map(|_| random_bitvec(&mut fitness_rng, variable_count))
+            .collect();
         let fitness = |graph: &Graph, diagram: &OrderedDiagram| {
             let mut f = 0.0;
-            for _ in 0..100 {
-                let bitvec = random_bitvec(&mut fitness_rng, variable_count);
+            for bitvec in &bitvecs {
                 let set_bits: u32 = bitvec.blocks().map(|b| b.count_ones()).sum();
                 let expected_output = set_bits % 2 == 0;
-                if evaluate_diagram(graph, diagram.root, &bitvec) == expected_output {
-                    f += 1.0;
+                if evaluate_diagram(graph, diagram.root, &bitvec) != expected_output {
+                    f -= 1.0;
                 }
             }
             return f;
         };
-        let mut engine = evolve_diagrams(rng, strategy, variable_count, 10000, fitness);
+        let mut engine = evolve_diagrams(rng, strategy, variable_count, 2500, fitness);
         {
             let graph = &engine.problem().graph;
             {
@@ -784,15 +780,80 @@ mod tests {
         {
             let mut best = engine.fitest().clone();
             let mut reduction_rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
-            while mutate_n1(&mut reduction_rng,
-                            &mut best.diagram,
-                            &mut engine.mut_problem().graph) ||
-                  mutate_n2(&mut reduction_rng,
-                            &mut best.diagram,
-                            &mut engine.mut_problem().graph) {}
+            let mut i = 0;
+            while i < 100 &&
+                  (mutate_n1(&mut reduction_rng,
+                             &mut best.diagram,
+                             &mut engine.mut_problem().graph) ||
+                   mutate_n2(&mut reduction_rng,
+                             &mut best.diagram,
+                             &mut engine.mut_problem().graph)) {
+                i += 1;
+            }
             write_diagram(&format!("test_output/best_{}.dot", test_name),
                           &best.diagram,
                           &engine.problem().graph);
+        }
+        for individual in engine.population() {
+            assert_eq!(0.0, individual.fitness);
+        }
+    }
+
+    #[test]
+    fn evolve_can_evolve_nine_bit_parity() {
+        let _ = env_logger::init();
+        let test_name = "evolve_can_evolve_twenty_bit_parity";
+        let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let variable_count = 9;
+        let strategy = Strategy::MuPlusLambda { mu: 1, lambda: 10 };
+        let mut fitness_rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let num_challenges = 100000;
+        let bitvecs: Vec<BitVec> = (0..num_challenges)
+            .map(|_| random_bitvec(&mut fitness_rng, variable_count))
+            .collect();
+        let fitness = |graph: &Graph, diagram: &OrderedDiagram| {
+            let mut f = 0.0;
+            for bitvec in &bitvecs {
+                let set_bits: u32 = bitvec.blocks().map(|b| b.count_ones()).sum();
+                let expected_output = set_bits % 2 == 0;
+                if evaluate_diagram(graph, diagram.root, &bitvec) != expected_output {
+                    f -= 1.0;
+                }
+            }
+            return f;
+        };
+        let mut engine = evolve_diagrams(rng, strategy, variable_count, 4600, fitness);
+        {
+            let graph = &engine.problem().graph;
+            {
+                let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
+                render_whole_graph(&mut f, &graph).unwrap();
+            }
+            for (idx, diagram) in engine.population().map(|i| &i.diagram).enumerate() {
+                let mut f = File::create(format!("test_output/diagram_{}_{}.dot", test_name, idx))
+                    .unwrap();
+                render_diagram(&mut f, diagram.clone(), graph).unwrap();
+            }
+        }
+        {
+            let mut best = engine.fitest().clone();
+            let mut reduction_rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+            let mut i = 0;
+            while i < 100 &&
+                  (mutate_n1(&mut reduction_rng,
+                             &mut best.diagram,
+                             &mut engine.mut_problem().graph) ||
+                   mutate_n2(&mut reduction_rng,
+                             &mut best.diagram,
+                             &mut engine.mut_problem().graph)) {
+                i += 1;
+            }
+            write_diagram(&format!("test_output/best_{}.dot", test_name),
+                          &best.diagram,
+                          &engine.problem().graph);
+        }
+        for individual in engine.population() {
+            assert_eq!(0.0, individual.fitness);
         }
     }
 
