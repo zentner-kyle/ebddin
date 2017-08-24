@@ -1,0 +1,3 @@
+[submodule "evolution-strategies"]
+	path = evolution-strategies
+	url = https://github.com/zentner-kyle/evolution_strategies

@@ -1,5 +1,5 @@
 [package]
-name = "bdd"
+name = "ebddin"
 version = "0.1.0"
 authors = ["Kyle Zentner <zentner.kyle@gmail.com>"]
 
@@ -12,5 +12,5 @@ log = "0.3"
 env_logger = "0.3"
 dot = "0.1"
 
-[dependencies.evolution_strategies]
-path = "../evolution-strategies"
+[dependencies.evolution-strategies]
+path = "evolution-strategies"
