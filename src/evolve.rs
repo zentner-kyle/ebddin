@@ -1,7 +1,8 @@
 #![allow(unused_variables)]
 use bit_vec::BitVec;
 use diagram::{Branch, Graph, Node, OrderedDiagram};
-use evolution_strategies::{Engine, PopulationIterMut, Problem, Strategy};
+use evaluate_diagram;
+use evolution_strategies::{Engine, Population, PopulationIterMut, Problem, Strategy};
 use rand::Rng;
 use random::choose_from_iter;
 use render::render_diagram;
@@ -51,102 +52,33 @@ pub struct DiagramIndividual {
     diagram: OrderedDiagram,
 }
 
-pub struct DiagramProblem<F>
-    where F: FnMut(&Graph, &OrderedDiagram) -> f64
+pub struct DiagramProblem<F, G>
+    where F: FnMut(&Graph, &OrderedDiagram) -> f64,
+          G: FnMut(usize) -> Option<(BitVec, bool)>
 {
     variable_count: usize,
     graph: Graph,
+    test_cases: Vec<(BitVec, bool)>,
     fitness: F,
+    test_generator: G,
+    generations: usize,
 }
 
-impl<F> Problem for DiagramProblem<F>
-    where F: FnMut(&Graph, &OrderedDiagram) -> f64
+impl<F, G> DiagramProblem<F, G>
+    where F: FnMut(&Graph, &OrderedDiagram) -> f64,
+          G: FnMut(usize) -> Option<(BitVec, bool)>
 {
-    type Individual = DiagramIndividual;
-    fn initialize<R>(&mut self, count: usize, rng: &mut R) -> Vec<Self::Individual>
-        where R: Rng
-    {
-
-        (0..count)
-            .map(|_| {
-                let mut order: Vec<_> = (0..self.variable_count).collect();
-                rng.shuffle(&mut order);
-                let diagram = OrderedDiagram {
-                    root: 0,
-                    order: Arc::new(order),
-                };
-                let fitness = (self.fitness)(&self.graph, &diagram);
-                DiagramIndividual {
-                    generation: 0,
-                    diagram,
-                    fitness,
-                }
-            })
-            .collect()
-    }
-
-    fn mutate<R>(&mut self, child: &mut Self::Individual, rng: &mut R) -> bool
-        where R: Rng
-    {
-        let graph = &mut self.graph;
-        child.generation += 1;
-        #[cfg(debug_assertions)]
-        write_diagram("before.dot", &child.diagram, graph);
-        debug!("order before = {:#?}", child.diagram.order);
-        let weights = [1.05, 1.0, 1.05, 1.0, 0.0, 2.0];
-        let total: f64 = weights.iter().sum();
-        let choice = rng.next_f64() * total;
-        if choice <= weights[0..1].iter().sum() {
-            debug!("n1");
-            mutate_n1(rng, &mut child.diagram, graph);
-        } else if choice <= weights[0..2].iter().sum() {
-            debug!("n1_inv");
-            mutate_n1_inv(rng, &mut child.diagram, graph);
-        } else if choice <= weights[0..3].iter().sum() {
-            debug!("n2");
-            mutate_n2(rng, &mut child.diagram, graph);
-        } else if choice <= weights[0..4].iter().sum() {
-            debug!("n2_inv");
-            mutate_n2_inv(rng, &mut child.diagram, graph);
-        } else if choice <= weights[0..5].iter().sum() {
-            debug!("n3");
-            mutate_n3(rng, &mut child.diagram, graph);
-        } else if choice <= weights[0..6].iter().sum() {
-            debug!("a1");
-            if mutate_a1(rng, &mut child.diagram, graph) {
-                child.fitness = (self.fitness)(graph, &child.diagram);
+    fn compute_fitness(&mut self, diagram: &OrderedDiagram) -> f64 {
+        let mut fitness = (self.fitness)(&self.graph, diagram);
+        for &(ref input, output) in &self.test_cases {
+            if evaluate_diagram(&self.graph, diagram.root, input) != output {
+                fitness -= 1.0;
             }
-        } else {
-            unreachable!();
         }
-        debug!("order after = {:#?}", child.diagram.order);
-        #[cfg(debug_assertions)]
-        {
-            write_diagram("after.dot", &child.diagram, graph);
-            check_order(graph, &child.diagram);
-            let reachable = reachable_set(graph, &child.diagram);
-            let nodes = node_set(graph, &child.diagram);
-            assert_eq!(reachable, nodes);
-        }
-        true
+        return fitness;
     }
 
-    fn compare<R>(&mut self,
-                  a: &Self::Individual,
-                  b: &Self::Individual,
-                  _rng: &mut R)
-                  -> Option<Ordering>
-        where R: Rng
-    {
-        let generation_cmp = a.generation.cmp(&b.generation);
-        return Some(a.fitness
-                        .partial_cmp(&b.fitness)
-                        .map_or(generation_cmp, |c| c.then(generation_cmp)));
-    }
-
-    fn maintain<R>(&mut self, population: PopulationIterMut<Self::Individual>, rng: &mut R) -> bool
-        where R: Rng
-    {
+    fn gc_graph(&mut self, population: PopulationIterMut<DiagramIndividual>) {
         let mut new_graph = Graph::new();
         let mut replacements: HashMap<usize, usize> = [(0usize, 0usize), (1usize, 1usize)]
             .iter()
@@ -182,28 +114,180 @@ impl<F> Problem for DiagramProblem<F>
             }
         }
         self.graph = new_graph;
-        return true;
+    }
+
+    fn add_new_test_cases(&mut self, mut population: Population<DiagramIndividual>) {
+        let mut new_test_cases = Vec::new();
+        'outer: for &DiagramIndividual {
+                         fitness,
+                         ref diagram,
+                         ..
+                     } in population.iter() {
+            if fitness == 0.0 {
+                for _ in 0..10000000usize {
+                    if new_test_cases.len() >= 1 {
+                        //if new_test_cases.len() >= 5 {
+                        break 'outer;
+                    }
+                    if let Some((input, output)) = (self.test_generator)(self.test_cases.len()) {
+                        if evaluate_diagram(&self.graph, diagram.root, &input) != output {
+                            new_test_cases.push((input, output));
+                        }
+                    } else {
+                        break 'outer;
+                    }
+                }
+            } else {
+                break 'outer;
+            }
+        }
+        if new_test_cases.len() > 0 {
+            println!("Increasing number of test cases to {}",
+                     self.test_cases.len() + new_test_cases.len());
+        }
+        self.test_cases.extend_from_slice(&new_test_cases);
+        for individual in population.iter_mut() {
+            individual.fitness = self.compute_fitness(&individual.diagram);
+        }
+    }
+
+    fn add_initial_test_cases(&mut self, count: usize) {
+
+        for _ in 0..count {
+            if let Some((input, output)) = (self.test_generator)(self.test_cases.len()) {
+                self.test_cases.push((input, output));
+            } else {
+                break;
+            }
+        }
     }
 }
 
-pub fn evolve_diagrams<F, R>(rng: R,
-                             strategy: Strategy,
-                             variable_count: usize,
-                             generations: usize,
-                             fitness: F)
-                             -> Engine<DiagramProblem<F>, R>
+impl<F, G> Problem for DiagramProblem<F, G>
     where F: FnMut(&Graph, &OrderedDiagram) -> f64,
+          G: FnMut(usize) -> Option<(BitVec, bool)>
+{
+    type Individual = DiagramIndividual;
+    fn initialize<R>(&mut self, count: usize, rng: &mut R) -> Vec<Self::Individual>
+        where R: Rng
+    {
+
+        (0..count)
+            .map(|_| {
+                let mut order: Vec<_> = (0..self.variable_count).collect();
+                rng.shuffle(&mut order);
+                let diagram = OrderedDiagram {
+                    root: 0,
+                    order: Arc::new(order),
+                };
+                let fitness = self.compute_fitness(&diagram);
+                DiagramIndividual {
+                    generation: 0,
+                    diagram,
+                    fitness,
+                }
+            })
+            .collect()
+    }
+
+    fn mutate<R>(&mut self, child: &mut Self::Individual, rng: &mut R) -> bool
+        where R: Rng
+    {
+        let mut needs_fitness_update = false;
+        {
+            let graph = &mut self.graph;
+            child.generation += 1;
+            #[cfg(debug_assertions)]
+            write_diagram("before.dot", &child.diagram, graph);
+            debug!("order before = {:#?}", child.diagram.order);
+            let weights = [1.05, 1.0, 1.05, 1.0, 0.0, 8.0];
+            let total: f64 = weights.iter().sum();
+            let choice = rng.next_f64() * total;
+            if choice <= weights[0..1].iter().sum() {
+                debug!("n1");
+                mutate_n1(rng, &mut child.diagram, graph);
+            } else if choice <= weights[0..2].iter().sum() {
+                debug!("n1_inv");
+                mutate_n1_inv(rng, &mut child.diagram, graph);
+            } else if choice <= weights[0..3].iter().sum() {
+                debug!("n2");
+                mutate_n2(rng, &mut child.diagram, graph);
+            } else if choice <= weights[0..4].iter().sum() {
+                debug!("n2_inv");
+                mutate_n2_inv(rng, &mut child.diagram, graph);
+            } else if choice <= weights[0..5].iter().sum() {
+                debug!("n3");
+                mutate_n3(rng, &mut child.diagram, graph);
+            } else if choice <= weights[0..6].iter().sum() {
+                debug!("a1");
+                if mutate_a1(rng, &mut child.diagram, graph) {
+                    needs_fitness_update = true;
+                }
+            } else {
+                unreachable!();
+            }
+            debug!("order after = {:#?}", child.diagram.order);
+            #[cfg(debug_assertions)]
+            {
+                write_diagram("after.dot", &child.diagram, graph);
+                check_order(graph, &child.diagram);
+                let reachable = reachable_set(graph, &child.diagram);
+                let nodes = node_set(graph, &child.diagram);
+                assert_eq!(reachable, nodes);
+            }
+        }
+        if needs_fitness_update {
+            child.fitness = self.compute_fitness(&child.diagram);
+        }
+        true
+    }
+
+    fn compare<R>(&mut self,
+                  a: &Self::Individual,
+                  b: &Self::Individual,
+                  _rng: &mut R)
+                  -> Option<Ordering>
+        where R: Rng
+    {
+        let generation_cmp = a.generation.cmp(&b.generation);
+        return Some(a.fitness
+                        .partial_cmp(&b.fitness)
+                        .map_or(generation_cmp, |c| c.then(generation_cmp)));
+    }
+
+    fn maintain<R>(&mut self, mut population: Population<Self::Individual>, rng: &mut R)
+        where R: Rng
+    {
+        self.gc_graph(population.iter_mut());
+        self.add_new_test_cases(population);
+    }
+}
+
+pub fn evolve_diagrams<F, G, R>(rng: R,
+                                strategy: Strategy,
+                                variable_count: usize,
+                                generations: usize,
+                                fitness: F,
+                                generator: G)
+                                -> Engine<DiagramProblem<F, G>, R>
+    where F: FnMut(&Graph, &OrderedDiagram) -> f64,
+          G: FnMut(usize) -> Option<(BitVec, bool)>,
           R: Rng
 {
     let graph = Graph::new();
-    let problem = DiagramProblem {
+    let mut problem = DiagramProblem {
         variable_count,
         graph,
+        test_cases: Vec::new(),
         fitness,
+        test_generator: generator,
+        generations: 0,
     };
+    problem.add_initial_test_cases(1);
     let mut engine = Engine::new(problem, strategy, rng);
     for i in 1..(1 + generations) {
         engine.run_generation();
+        engine.mut_problem().generations += 1;
         if i % 50 == 0 {
             engine.maintain();
         }
@@ -212,6 +296,11 @@ pub fn evolve_diagrams<F, R>(rng: R,
                           &engine.fitest().diagram,
                           &engine.problem().graph);
             println!("Completed generation {}", i);
+            println!("Best fitness = {}", engine.fitest().fitness);
+            if engine.fitest().fitness == 0.0 {
+                println!("Found optimal!");
+                break;
+            }
         }
     }
     engine
@@ -631,6 +720,8 @@ mod tests {
     use rand::XorShiftRng;
     use render::{render_diagram, render_whole_graph};
     use std::fs::File;
+    use std::fs::OpenOptions;
+    use std::io::Write;
 
     fn write_diagram(name: &str, diagram: &OrderedDiagram, graph: &Graph) {
         let mut f = File::create(name).unwrap();
@@ -652,7 +743,8 @@ mod tests {
         } else {
             return 0.0f64;
         };
-        let engine = evolve_diagrams(rng, strategy, variable_count, 10, fitness);
+        let generator = |_| None;
+        let engine = evolve_diagrams(rng, strategy, variable_count, 10, fitness, generator);
         let graph = &engine.problem().graph;
         {
             let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
@@ -686,7 +778,8 @@ mod tests {
             }
             return f;
         };
-        let engine = evolve_diagrams(rng, strategy, variable_count, 10, fitness);
+        let generator = |_| None;
+        let engine = evolve_diagrams(rng, strategy, variable_count, 10, fitness, generator);
         let graph = &engine.problem().graph;
         {
             let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
@@ -727,7 +820,8 @@ mod tests {
             }
             return f;
         };
-        let engine = evolve_diagrams(rng, strategy, variable_count, 50, fitness);
+        let generator = |_| None;
+        let engine = evolve_diagrams(rng, strategy, variable_count, 50, fitness, generator);
         let graph = &engine.problem().graph;
         {
             let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
@@ -741,10 +835,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn evolve_can_evolve_eight_bit_parity() {
+    //#[test]
+    fn evolve_can_evolve_k_bit_parity() {
         let _ = env_logger::init();
-        let test_name = "evolve_can_evolve_twenty_bit_parity";
+        let test_name = "evolve_can_evolve_k_bit_parity";
         let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
         let variable_count = 8;
         let strategy = Strategy::MuPlusLambda { mu: 1, lambda: 10 };
@@ -764,7 +858,8 @@ mod tests {
             }
             return f;
         };
-        let mut engine = evolve_diagrams(rng, strategy, variable_count, 2500, fitness);
+        let generator = |_| None;
+        let mut engine = evolve_diagrams(rng, strategy, variable_count, 2500, fitness, generator);
         {
             let graph = &engine.problem().graph;
             {
@@ -799,30 +894,115 @@ mod tests {
         }
     }
 
-    #[test]
-    fn evolve_can_evolve_nine_bit_parity() {
+    fn evolve_can_evolve_parity(variable_count: usize) {
         let _ = env_logger::init();
-        let test_name = "evolve_can_evolve_twenty_bit_parity";
+        let test_name = format!("evolve_can_evolve_{}_bit_parity", variable_count);
         let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
-        let variable_count = 9;
+        let strategy = Strategy::MuPlusLambda { mu: 1, lambda: 10 };
+        let mut generator_rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let fitness = |graph: &Graph, diagram: &OrderedDiagram| { return 0.0; };
+        let generator = |_| {
+            let input = random_bitvec(&mut generator_rng, variable_count);
+            let set_bits: u32 = input.blocks().map(|b| b.count_ones()).sum();
+            let output = set_bits % 2 == 0;
+            return Some((input, output));
+        };
+        let mut engine =
+            evolve_diagrams(rng, strategy, variable_count, 10000000, fitness, generator);
+        {
+            let graph = &engine.problem().graph;
+            {
+                let mut f = File::create(format!("test_output/{}_graph.dot", test_name)).unwrap();
+                render_whole_graph(&mut f, &graph).unwrap();
+            }
+            for (idx, diagram) in engine.population().map(|i| &i.diagram).enumerate() {
+                let mut f = File::create(format!("test_output/diagram_{}_{}.dot", test_name, idx))
+                    .unwrap();
+                render_diagram(&mut f, diagram.clone(), graph).unwrap();
+            }
+        }
+        {
+            let test_case_count = engine.problem().test_cases.len();
+            let generations = engine.problem().generations;
+            let mut best = engine.fitest().clone();
+            let mut reduction_rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+            let mut i = 0;
+            while i < 100 &&
+                  (mutate_n1(&mut reduction_rng,
+                             &mut best.diagram,
+                             &mut engine.mut_problem().graph) ||
+                   mutate_n2(&mut reduction_rng,
+                             &mut best.diagram,
+                             &mut engine.mut_problem().graph)) {
+                i += 1;
+            }
+            write_diagram(&format!("test_output/best_{}.dot", test_name),
+                          &best.diagram,
+                          &engine.problem().graph);
+            OpenOptions::new()
+                .write(true)
+                .truncate(false)
+                .append(true)
+                .open("test_output/parity_range_stats.csv")
+                .unwrap()
+                .write(format!("{},{},{}\n", variable_count, test_case_count, generations)
+                           .as_bytes())
+                .unwrap();
+        }
+        for individual in engine.population() {
+            assert_eq!(0.0, individual.fitness);
+        }
+    }
+
+    #[test]
+    fn evolve_parity_range() {
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open("test_output/parity_range_stats.csv")
+            .unwrap()
+            .write("bits,test_cases,generations\n".as_bytes())
+            .unwrap();
+        for variable_count in 2..3 {
+            evolve_can_evolve_parity(variable_count);
+        }
+    }
+
+    //#[test]
+    fn evolve_can_evolve_n_bit_parity() {
+        let _ = env_logger::init();
+        let test_name = "evolve_can_evolve_n_bit_parity";
+        let rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
+        let variable_count = 3;
         let strategy = Strategy::MuPlusLambda { mu: 1, lambda: 10 };
         let mut fitness_rng = XorShiftRng::from_seed([0xde, 0xad, 0xbe, 0xef]);
-        let num_challenges = 100000;
-        let bitvecs: Vec<BitVec> = (0..num_challenges)
-            .map(|_| random_bitvec(&mut fitness_rng, variable_count))
-            .collect();
+        //let num_challenges = 100000;
+        //let bitvecs: Vec<BitVec> = (0..num_challenges)
+        //.map(|_| random_bitvec(&mut fitness_rng, variable_count))
+        //.collect();
         let fitness = |graph: &Graph, diagram: &OrderedDiagram| {
-            let mut f = 0.0;
-            for bitvec in &bitvecs {
-                let set_bits: u32 = bitvec.blocks().map(|b| b.count_ones()).sum();
-                let expected_output = set_bits % 2 == 0;
-                if evaluate_diagram(graph, diagram.root, &bitvec) != expected_output {
-                    f -= 1.0;
-                }
-            }
-            return f;
+            return 0.0;
+            //let mut f = 0.0;
+            //for bitvec in &bitvecs {
+            //let set_bits: u32 = bitvec.blocks().map(|b| b.count_ones()).sum();
+            //let expected_output = set_bits % 2 == 0;
+            //if evaluate_diagram(graph, diagram.root, &bitvec) != expected_output {
+            //f -= 1.0;
+            //}
+            //}
+            //return f;
         };
-        let mut engine = evolve_diagrams(rng, strategy, variable_count, 4600, fitness);
+        let generator = |_| {
+            let input = random_bitvec(&mut fitness_rng, variable_count);
+            let set_bits: u32 = input.blocks().map(|b| b.count_ones()).sum();
+            let output = set_bits % 2 == 0;
+            return Some((input, output));
+        };
+        //let mut engine = evolve_diagrams(rng, strategy, variable_count, 4600, fitness, generator);
+        //let mut engine = evolve_diagrams(rng, strategy, variable_count, 5000, fitness, generator);
+        let mut engine =
+            evolve_diagrams(rng, strategy, variable_count, 10000000, fitness, generator);
         {
             let graph = &engine.problem().graph;
             {
@@ -856,6 +1036,7 @@ mod tests {
             assert_eq!(0.0, individual.fitness);
         }
     }
+
 
     #[test]
     fn can_mutate_n1_inv_above_leaf() {
